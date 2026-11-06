@@ -20,7 +20,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 /* ---------- 状態 ---------- */
 
 function defaultState() {
-  return { version: 1, settings: { slotCount: 3 }, characters: [], customFruits: [], parties: [], bank: [] };
+  return { version: 1, settings: { slotCount: 3 }, characters: [], customFruits: [], parties: [], bank: [], accounts: [] };
 }
 
 function emptyPlan() {
@@ -38,12 +38,34 @@ function newParty(name) {
   };
 }
 
+const gradeOk = (g) => (DATA.grades.includes(g) ? g : '');
+
+function cleanPlan(pl) {
+  return {
+    fruitId: String(pl?.fruitId ?? ''),
+    target: gradeOk(pl?.target),
+    current: gradeOk(pl?.current),
+    status: DATA.statuses.some((x) => x.id === pl?.status) ? pl.status : 'todo'
+  };
+}
+
 // 読み込んだデータの欠けを補い、壊れた値を取り除く
 function normalize(raw) {
   const s = defaultState();
   if (!raw || typeof raw !== 'object') return s;
   const slotCount = Number(raw.settings?.slotCount);
   s.settings.slotCount = slotCount === 4 ? 4 : 3;
+
+  // メイン以外のアカウント（サブ垢など）。キャラやバンクの実が accountId で参照する（空はメイン）
+  s.accounts = (Array.isArray(raw.accounts) ? raw.accounts : [])
+    .filter((a) => a && typeof a === 'object' && a.id)
+    .map((a) => ({
+      id: String(a.id),
+      name: String(a.name ?? '').slice(0, 20) || '名前なし',
+      memo: String(a.memo ?? '').slice(0, 500)
+    }));
+  const accountIds = new Set(s.accounts.map((a) => a.id));
+  const accountOk = (id) => (accountIds.has(id) ? id : '');
 
   s.characters = (Array.isArray(raw.characters) ? raw.characters : [])
     .filter((c) => c && typeof c === 'object' && c.id)
@@ -53,7 +75,10 @@ function normalize(raw) {
       race: String(c.race ?? '').slice(0, 20),
       hit: DATA.hits.includes(c.hit) ? c.hit : DATA.hits[0],
       type: DATA.types.includes(c.type) ? c.type : DATA.types[0],
-      memo: String(c.memo ?? '').slice(0, 300)
+      memo: String(c.memo ?? '').slice(0, 300),
+      accountId: accountOk(c.accountId),
+      // パーティに入れずに、キャラ単体で狙う実
+      plans: (Array.isArray(c.plans) ? c.plans : []).slice(0, 4).map(cleanPlan)
     }));
 
   s.customFruits = (Array.isArray(raw.customFruits) ? raw.customFruits : [])
@@ -69,8 +94,6 @@ function normalize(raw) {
     }));
 
   const charIds = new Set(s.characters.map((c) => c.id));
-  const statusIds = DATA.statuses.map((x) => x.id);
-  const gradeOk = (g) => (DATA.grades.includes(g) ? g : '');
 
   s.parties = (Array.isArray(raw.parties) ? raw.parties : [])
     .filter((p) => p && typeof p === 'object' && p.id)
@@ -84,12 +107,7 @@ function normalize(raw) {
       const members = Array.isArray(p.members) ? p.members : [];
       party.members = Array.from({ length: PARTY_SIZE }, (_, i) => {
         const m = members[i] || {};
-        const plans = (Array.isArray(m.plans) ? m.plans : []).slice(0, 4).map((pl) => ({
-          fruitId: String(pl?.fruitId ?? ''),
-          target: gradeOk(pl?.target),
-          current: gradeOk(pl?.current),
-          status: statusIds.includes(pl?.status) ? pl.status : 'todo'
-        }));
+        const plans = (Array.isArray(m.plans) ? m.plans : []).slice(0, 4).map(cleanPlan);
         return { charId: charIds.has(m.charId) ? m.charId : null, plans };
       });
       return party;
@@ -103,7 +121,8 @@ function normalize(raw) {
       fruitId: String(b.fruitId),
       grade: b.grade,
       count: Math.min(99, Math.max(1, Math.floor(Number(b.count)) || 1)),
-      memo: String(b.memo ?? '').slice(0, 60)
+      memo: String(b.memo ?? '').slice(0, 60),
+      accountId: accountOk(b.accountId)
     }));
   return s;
 }
@@ -152,6 +171,10 @@ const gradeRank = (g) => {
   const i = DATA.grades.indexOf(g);
   return i < 0 ? 999 : i;
 };
+const accountById = (id) => (id ? state.accounts.find((a) => a.id === id) || null : null);
+const accountName = (id) => accountById(id)?.name || 'メイン';
+const accountChoices = () => [{ value: '', label: 'メイン' }]
+  .concat(state.accounts.map((a) => ({ value: a.id, label: a.name })));
 const statusLabel = (id) => DATA.statuses.find((s) => s.id === id)?.label || id;
 
 function attrOf(c, scope) {
@@ -162,7 +185,9 @@ function attrOf(c, scope) {
   return '';
 }
 
+// パーティの枠・キャラ単体のどちらにも使う（どちらも .plans を持つ）
 function plansOf(member) {
+  if (!Array.isArray(member.plans)) member.plans = [];
   const n = state.settings.slotCount;
   while (member.plans.length < n) member.plans.push(emptyPlan());
   return member.plans.slice(0, n);
@@ -299,25 +324,34 @@ function partyHints(party, a) {
 
 // 実はキャラにつくので、同じキャラ×同じ実は複数のパーティにまたがっていても1つの狙いにまとめる。
 // gradeRank は高い等級ほど小さい（未設定は 999）。
-function collectTargets() {
-  const map = new Map();
+// 狙っている実を、パーティの枠とキャラ単体のメモの両方から集める。
+// ref は { party, i, k }（パーティの枠）か { char, k }（キャラ単体）。
+function forEachPlan(fn) {
   for (const party of state.parties) {
     party.members.forEach((m, i) => {
       const c = charById(m.charId);
-      if (!c) return;
-      plansOf(m).forEach((p, k) => {
-        if (!p.fruitId || !fruitById(p.fruitId)) return;
-        const key = `${c.id}|${p.fruitId}`;
-        if (!map.has(key)) map.set(key, { key, c, fruitId: p.fruitId, target: 999, current: 999, refs: [], parties: [] });
-        const t = map.get(key);
-        if (p.target) t.target = Math.min(t.target, gradeRank(p.target));
-        if (p.current) t.current = Math.min(t.current, gradeRank(p.current));
-        if (p.status === 'done') return;
-        t.refs.push({ party, i, k });
-        if (!t.parties.includes(party)) t.parties.push(party);
-      });
+      if (c) plansOf(m).forEach((p, k) => fn(c, p, { party, i, k }));
     });
   }
+  for (const c of state.characters) plansOf(c).forEach((p, k) => fn(c, p, { char: c, k }));
+}
+
+const planOf = (ref) => (ref.party ? ref.party.members[ref.i].plans[ref.k] : ref.char.plans[ref.k]);
+const sourceLink = (ref) => (ref.party
+  ? `<a href="#/party/${esc(ref.party.id)}">${esc(ref.party.name)}</a>`
+  : `<a href="#/char/${esc(ref.char.id)}">キャラのメモ</a>`);
+
+function collectTargets() {
+  const map = new Map();
+  forEachPlan((c, p, ref) => {
+    if (!p.fruitId || !fruitById(p.fruitId)) return;
+    const key = `${c.id}|${p.fruitId}`;
+    if (!map.has(key)) map.set(key, { key, c, fruitId: p.fruitId, target: 999, current: 999, refs: [] });
+    const t = map.get(key);
+    if (p.target) t.target = Math.min(t.target, gradeRank(p.target));
+    if (p.current) t.current = Math.min(t.current, gradeRank(p.current));
+    if (p.status !== 'done') t.refs.push(ref);
+  });
   return [...map.values()].filter((t) => t.refs.length && !(t.target < 999 && t.current <= t.target));
 }
 
@@ -328,7 +362,7 @@ function bankMatches() {
   const done = new Set();
   for (const entry of state.bank) {
     const r = gradeRank(entry.grade);
-    const same = targets.filter((t) => t.fruitId === entry.fruitId && t.target < 999);
+    const same = targets.filter((t) => t.fruitId === entry.fruitId && t.target < 999 && t.c.accountId === entry.accountId);
     const ok = same.filter((t) => r <= t.target);
     if (ok.length) {
       complete.push({ entry, targets: ok });
@@ -337,24 +371,26 @@ function bankMatches() {
   }
   for (const entry of state.bank) {
     const r = gradeRank(entry.grade);
-    const up = targets.filter((t) => t.fruitId === entry.fruitId && t.target < 999
+    const up = targets.filter((t) => t.fruitId === entry.fruitId && t.target < 999 && t.c.accountId === entry.accountId
       && r > t.target && r < t.current && !done.has(t.key));
     if (up.length) upgrade.push({ entry, targets: up });
   }
-  const noTarget = targets.filter((t) => t.target === 999 && state.bank.some((b) => b.fruitId === t.fruitId));
+  const noTarget = targets.filter((t) => t.target === 999
+    && state.bank.some((b) => b.fruitId === t.fruitId && b.accountId === t.c.accountId));
   return { complete, upgrade, noTarget, completeCount: done.size };
 }
 
 // バンクの実が、目標に届く等級で入っているか
-const bankCovers = (fruitId, target) =>
-  !!target && state.bank.some((b) => b.fruitId === fruitId && gradeRank(b.grade) <= gradeRank(target));
+const bankCovers = (c, fruitId, target) => !!target && state.bank.some((b) =>
+  b.fruitId === fruitId && b.accountId === c.accountId && gradeRank(b.grade) <= gradeRank(target));
 
 function moveFromBank(entryId, key) {
   const entry = state.bank.find((b) => b.id === entryId);
   const t = collectTargets().find((x) => x.key === key);
   if (!entry || !t) return;
   const before = JSON.stringify(state);
-  for (const { party, i, k } of t.refs) setPlan(party, i, k, 'current', entry.grade);
+  for (const ref of t.refs) applyPlan(planOf(ref), 'current', entry.grade);
+  for (const ref of t.refs) if (ref.party) ref.party.updatedAt = Date.now();
   entry.count -= 1;
   if (entry.count <= 0) state.bank = state.bank.filter((b) => b !== entry);
   save();
@@ -374,7 +410,8 @@ function chips(c) {
   const hitCls = c.hit === '反射' ? 'chip-hit-ref' : 'chip-hit-pen';
   return `<span class="chip chip-race">${esc(c.race || '種族未設定')}</span>`
     + `<span class="chip ${hitCls}">${esc(c.hit)}</span>`
-    + `<span class="chip chip-type">${esc(c.type)}</span>`;
+    + `<span class="chip chip-type">${esc(c.type)}</span>`
+    + (c.accountId ? `<span class="chip chip-account">${esc(accountName(c.accountId))}</span>` : '');
 }
 
 function options(list, selected, placeholder) {
@@ -405,6 +442,33 @@ function fruitOptions(selected, placeholder = '— 狙う実を選ぶ —') {
       + '</optgroup>';
   }
   return html;
+}
+
+// 狙う実1つ分の入力欄。bind は select に付ける data 属性（どの枠かを表す）
+function planRow(p, k, bind, fk, badge = '', notes = '') {
+  const f = p.fruitId ? fruitById(p.fruitId) : null;
+  return `
+    <div class="plan status-${esc(p.status)}${f ? '' : ' is-empty'}">
+      <div class="plan-top">
+        <span class="plan-no">${k + 1}</span>
+        <select class="plan-fruit" data-plan="fruitId" ${bind} data-fk="${fk}-fruit" aria-label="${k + 1}つ目の実">${fruitOptions(p.fruitId)}</select>
+        ${badge}
+      </div>
+      ${f ? `
+      <div class="plan-grid">
+        <label><span>目標</span><select data-plan="target" ${bind} data-fk="${fk}-target">${options(DATA.grades, p.target, '未設定')}</select></label>
+        <label><span>今</span><select data-plan="current" ${bind} data-fk="${fk}-current">${options(DATA.grades, p.current, 'なし')}</select></label>
+        <label><span>状態</span><select data-plan="status" ${bind} data-fk="${fk}-status">${options(DATA.statuses.map((s) => ({ value: s.id, label: s.label })), p.status)}</select></label>
+      </div>` : ''}
+      ${notes}
+    </div>`;
+}
+
+function scopeBadge(f) {
+  if (!f) return '';
+  if (f.scope === 'quest') return '<span class="badge quest">クエスト全体</span>';
+  if (BOND_SCOPES.includes(f.scope)) return `<span class="badge bond">${DATA.scopes[f.scope]}</span>`;
+  return '<span class="badge self">自分のみ</span>';
 }
 
 function progressOf(party) {
@@ -489,7 +553,7 @@ function viewParty(id) {
     : '<p class="muted">下の枠にキャラを入れると、種族・撃種・戦型の重なりがここに出ます。</p>';
 
   const charOptions = [...state.characters].sort((x, y) => x.name.localeCompare(y.name, 'ja'))
-    .map((c) => ({ value: c.id, label: `${c.name}（${c.race}/${c.hit}/${normType(c.type)}）` }));
+    .map((c) => ({ value: c.id, label: `${c.name}（${c.race}/${c.hit}/${normType(c.type)}）${c.accountId ? `・${accountName(c.accountId)}` : ''}` }));
 
   const slots = party.members.map((m, i) => {
     const c = a.chars[i];
@@ -514,22 +578,7 @@ function viewParty(id) {
       }
       const notes = (a.notes[`${i}-${k}`] || [])
         .map((n) => `<p class="note note-${n.level}">${esc(n.text)}</p>`).join('');
-      const fk = `plan-${i}-${k}`;
-      return `
-        <div class="plan status-${esc(p.status)}${f ? '' : ' is-empty'}">
-          <div class="plan-top">
-            <span class="plan-no">${k + 1}</span>
-            <select class="plan-fruit" data-plan="fruitId" data-slot="${i}" data-k="${k}" data-fk="${fk}-fruit" aria-label="${i + 1}体目 ${k + 1}つ目の実">${fruitOptions(p.fruitId)}</select>
-            ${badge}
-          </div>
-          ${f ? `
-          <div class="plan-grid">
-            <label><span>目標</span><select data-plan="target" data-slot="${i}" data-k="${k}" data-fk="${fk}-target">${options(DATA.grades, p.target, '未設定')}</select></label>
-            <label><span>今</span><select data-plan="current" data-slot="${i}" data-k="${k}" data-fk="${fk}-current">${options(DATA.grades, p.current, 'なし')}</select></label>
-            <label><span>状態</span><select data-plan="status" data-slot="${i}" data-k="${k}" data-fk="${fk}-status">${options(DATA.statuses.map((s) => ({ value: s.id, label: s.label })), p.status)}</select></label>
-          </div>` : ''}
-          ${notes}
-        </div>`;
+      return planRow(p, k, `data-slot="${i}" data-k="${k}"`, `plan-${i}-${k}`, badge, notes);
     }).join('');
 
     return `
@@ -591,20 +640,14 @@ let todoFilter = 'open';
 
 function viewTodo() {
   const byChar = new Map();
-  for (const party of state.parties) {
-    party.members.forEach((m, i) => {
-      const c = charById(m.charId);
-      if (!c) return;
-      plansOf(m).forEach((p, k) => {
-        if (!p.fruitId) return;
-        if (todoFilter === 'open' && p.status === 'done') return;
-        const f = fruitById(p.fruitId);
-        if (!f) return;
-        if (!byChar.has(c.id)) byChar.set(c.id, { c, rows: [] });
-        byChar.get(c.id).rows.push({ party, i, k, p, f });
-      });
-    });
-  }
+  forEachPlan((c, p, ref) => {
+    if (!p.fruitId) return;
+    if (todoFilter === 'open' && p.status === 'done') return;
+    const f = fruitById(p.fruitId);
+    if (!f) return;
+    if (!byChar.has(c.id)) byChar.set(c.id, { c, rows: [] });
+    byChar.get(c.id).rows.push({ ref, p, f });
+  });
 
   const order = { doing: 0, todo: 1, compromise: 2, done: 3 };
   const groups = [...byChar.values()].sort((x, y) => {
@@ -618,7 +661,7 @@ function viewTodo() {
     return `
       <article class="card todo-card">
         <div class="todo-head">
-          <h3>${esc(c.name)}</h3>
+          <h3><a class="plain" href="#/char/${esc(c.id)}">${esc(c.name)}</a></h3>
           <div class="chips">${chips(c)}</div>
         </div>
         <ul class="todo-list">
@@ -627,11 +670,13 @@ function viewTodo() {
               <div class="todo-main">
                 <b>${esc(r.f.short)}</b>
                 <span class="grade">${esc(r.p.current || 'なし')} → ${esc(r.p.target || '未設定')}</span>
-                ${r.p.status !== 'done' && bankCovers(r.p.fruitId, r.p.target) ? '<a class="badge in-bank" href="#/bank">バンクにあり</a>' : ''}
+                ${r.p.status !== 'done' && bankCovers(c, r.p.fruitId, r.p.target) ? '<a class="badge in-bank" href="#/bank">バンクにあり</a>' : ''}
               </div>
               <div class="todo-sub">
-                <a href="#/party/${esc(r.party.id)}">${esc(r.party.name)}</a>
-                <select data-todo="${esc(r.party.id)}" data-slot="${r.i}" data-k="${r.k}" aria-label="状態">
+                ${sourceLink(r.ref)}
+                <select ${r.ref.party
+                  ? `data-todo="${esc(r.ref.party.id)}" data-slot="${r.ref.i}"`
+                  : `data-todo-char="${esc(r.ref.char.id)}"`} data-k="${r.ref.k}" aria-label="状態">
                   ${options(DATA.statuses.map((s) => ({ value: s.id, label: s.label })), r.p.status)}
                 </select>
               </div>
@@ -652,7 +697,7 @@ function viewTodo() {
       <p class="muted lead">英雄の神殿でリーダーにするキャラごとに、狙っている実をまとめています。</p>
       ${groups.length ? `<div class="stack">${body}</div>` : emptyBox(
         todoFilter === 'open' ? '未完了の厳選はありません。' : 'まだ狙う実が登録されていません。',
-        '<a class="btn" href="#/parties">パーティを開く</a>'
+        '<a class="btn" href="#/chars">キャラから狙う実をメモする</a> <a class="btn" href="#/parties">パーティを開く</a>'
       )}
     </section>`;
 }
@@ -673,6 +718,7 @@ function viewBank() {
           <b>${esc(f ? f.short : '（消した実）')}</b>
           <span class="badge grade-badge">${esc(entry.grade)}</span>
           <span class="badge self">×${entry.count}</span>
+          ${state.accounts.length ? `<span class="badge account">${esc(accountName(entry.accountId))}</span>` : ''}
           ${targets.length > entry.count ? `<span class="badge bond">候補${targets.length}体に${entry.count}個</span>` : ''}
         </div>
         <ul class="bank-targets">
@@ -681,7 +727,7 @@ function viewBank() {
               <div class="bank-target-main">
                 <b>${esc(t.c.name)}</b>
                 <span class="grade">今 ${esc(gradeText(t.current))} → 目標 ${esc(gradeText(t.target))}</span>
-                <span class="party-meta">${t.parties.map((p) => `<a href="#/party/${esc(p.id)}">${esc(p.name)}</a>`).join('、')}</span>
+                <span class="party-meta">${t.refs.map(sourceLink).filter((x, n, arr) => arr.indexOf(x) === n).join('、')}</span>
               </div>
               <button class="btn${isComplete ? ' primary' : ''}" data-action="bank-move" data-id="${esc(entry.id)}" data-key="${esc(t.key)}">移した</button>
             </li>`).join('')}
@@ -694,7 +740,7 @@ function viewBank() {
     return `
       <li>
         <b>${esc(f ? f.short : '（消した実）')}</b>
-        <span>${esc(b.grade)}・${b.count}個${b.memo ? `・${esc(b.memo)}` : ''}</span>
+        <span>${state.accounts.length ? `${esc(accountName(b.accountId))}・` : ''}${esc(b.grade)}・${b.count}個${b.memo ? `・${esc(b.memo)}` : ''}</span>
         <span class="fruit-actions">
           <button class="icon-btn" data-action="edit-bank" data-id="${esc(b.id)}" aria-label="編集">✎</button>
           <button class="icon-btn danger" data-action="delete-bank" data-id="${esc(b.id)}" aria-label="削除">×</button>
@@ -708,7 +754,7 @@ function viewBank() {
         <h2>わくわくバンク</h2>
         <button class="btn primary" data-action="new-bank">＋ 実を登録</button>
       </div>
-      <p class="muted lead">バンクに入れている実を登録すると、パーティで狙っている実と照らし合わせて、移せば厳選が終わるキャラを探します。</p>
+      <p class="muted lead">バンクに入れている実を登録すると、パーティやキャラで狙っている実と照らし合わせて、移せば厳選が終わるキャラを探します。</p>
       <div class="stats">
         <div class="stat"><span>バンクの実</span><b>${total}</b></div>
         <div class="stat ok"><span>移せば完了</span><b>${completeCount}</b></div>
@@ -733,9 +779,14 @@ function viewBank() {
 
 /* ---------- 画面：キャラ ---------- */
 
+let charFilter = 'all';
+
 function viewChars() {
   const usage = (id) => state.parties.filter((p) => p.members.some((m) => m.charId === id)).length;
-  const list = [...state.characters].sort((x, y) => x.name.localeCompare(y.name, 'ja'));
+  if (charFilter !== 'all' && charFilter !== '' && !accountById(charFilter)) charFilter = 'all';
+  const list = [...state.characters]
+    .filter((c) => charFilter === 'all' || c.accountId === charFilter)
+    .sort((x, y) => x.name.localeCompare(y.name, 'ja'));
   const items = list.map((c) => `
     <article class="card char-card">
       <div class="char-card-head">
@@ -747,7 +798,9 @@ function viewChars() {
       </div>
       <div class="chips">${chips(c)}</div>
       ${c.memo ? `<p class="char-memo">${esc(c.memo)}</p>` : ''}
+      ${wishSummary(c)}
       <p class="party-meta">${usage(c.id)} 個のパーティで使用中</p>
+      <a class="btn small-btn" href="#/char/${esc(c.id)}">狙う実をメモ ›</a>
     </article>`).join('');
 
   return `
@@ -756,10 +809,96 @@ function viewChars() {
         <h2>キャラ</h2>
         <button class="btn primary" data-action="new-char">＋ 登録</button>
       </div>
-      ${list.length ? `<div class="grid">${items}</div>` : emptyBox(
-        'キャラ名と種族・撃種・戦型を登録すると、どのパーティでも使い回せます。',
-        '<button class="btn primary" data-action="new-char">キャラを登録する</button>'
-      )}
+      ${state.accounts.length ? `
+      <div class="seg wrap" role="group" aria-label="アカウントで絞り込む">
+        ${[{ value: 'all', label: 'すべて' }].concat(accountChoices()).map((o) =>
+          `<button class="${charFilter === o.value ? 'on' : ''}" data-action="char-filter" data-value="${esc(o.value)}">${esc(o.label)}</button>`).join('')}
+      </div>` : ''}
+      ${list.length ? `<div class="grid">${items}</div>` : state.characters.length
+        ? '<p class="muted">このアカウントのキャラはまだ登録されていません。</p>'
+        : emptyBox(
+          'キャラ名と種族・撃種・戦型を登録すると、どのパーティでも使い回せます。',
+          '<button class="btn primary" data-action="new-char">キャラを登録する</button>'
+        )}
+
+      <div class="card accounts-card">
+        <div class="section-head tight">
+          <h3 class="card-title">アカウント<small>サブ垢などを登録すると、キャラやバンクの実をアカウントごとに分けてメモできます（任意）。</small></h3>
+          <button class="btn" data-action="new-account">＋ 追加</button>
+        </div>
+        ${state.accounts.length ? `<ul class="fruit-list">
+          ${state.accounts.map((a) => {
+            const n = state.characters.filter((c) => c.accountId === a.id).length;
+            return `
+            <li>
+              <b>${esc(a.name)}</b>
+              <span>キャラ ${n} 体</span>
+              <span class="fruit-actions">
+                <button class="icon-btn" data-action="edit-account" data-id="${esc(a.id)}" aria-label="${esc(a.name)}を編集">✎</button>
+                <button class="icon-btn danger" data-action="delete-account" data-id="${esc(a.id)}" aria-label="${esc(a.name)}を削除">×</button>
+              </span>
+              ${a.memo ? `<p class="char-memo account-memo">${esc(a.memo)}</p>` : ''}
+            </li>`;
+          }).join('')}
+        </ul>` : '<p class="muted">登録していないキャラやバンクの実は、すべて「メイン」として扱います。</p>'}
+      </div>
+    </section>`;
+}
+
+// キャラ単体で狙っている実の一覧（キャラのカード用）
+function wishSummary(c) {
+  const list = plansOf(c).filter((p) => p.fruitId && fruitById(p.fruitId));
+  if (!list.length) return '';
+  return `<div class="wish-list">${list.map((p) =>
+    `<span class="wish status-${esc(p.status)}">${esc(fruitById(p.fruitId).short)}<small>${esc(p.target || '目標未設定')}</small></span>`).join('')}</div>`;
+}
+
+/* ---------- 画面：キャラ詳細（パーティなしで狙う実をメモする） ---------- */
+
+function viewChar(id) {
+  const c = charById(id);
+  if (!c) return emptyBox('このキャラは見つかりませんでした。', '<a class="btn" href="#/chars">キャラ一覧へ</a>');
+  const rows = plansOf(c).map((p, k) => planRow(p, k, `data-char="${esc(c.id)}" data-k="${k}"`, `cplan-${k}`,
+    scopeBadge(p.fruitId ? fruitById(p.fruitId) : null))).join('');
+
+  // パーティの枠で狙っている実（読むだけ。編集はパーティの画面で）
+  const inParties = [];
+  for (const party of state.parties) {
+    party.members.forEach((m) => {
+      if (m.charId !== c.id) return;
+      plansOf(m).forEach((p) => {
+        const f = p.fruitId ? fruitById(p.fruitId) : null;
+        if (f) inParties.push({ party, p, f });
+      });
+    });
+  }
+
+  return `
+    <section>
+      <a class="back" href="#/chars">‹ キャラ一覧</a>
+      <div class="card">
+        <div class="char-card-head">
+          <h2>${esc(c.name)}</h2>
+          <button class="icon-btn" data-action="edit-char" data-id="${esc(c.id)}" aria-label="${esc(c.name)}を編集">✎</button>
+        </div>
+        <div class="chips">${chips(c)}</div>
+        ${c.memo ? `<p class="char-memo">${esc(c.memo)}</p>` : ''}
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">狙う実<small>パーティを作らなくても、このキャラにつけたい実をメモできます。「やること」とバンクの判定にも入ります。</small></h3>
+        <div class="plans">${rows}</div>
+      </div>
+
+      ${inParties.length ? `
+      <div class="card">
+        <h3 class="card-title">パーティで狙っている実</h3>
+        <ul class="fruit-list">
+          ${inParties.map(({ party, p, f }) => `
+            <li><b>${esc(f.short)}</b><span>${esc(p.current || 'なし')} → ${esc(p.target || '未設定')}・${esc(statusLabel(p.status))}</span>
+              <a class="fruit-actions" href="#/party/${esc(party.id)}">${esc(party.name)}</a></li>`).join('')}
+        </ul>
+      </div>` : ''}
     </section>`;
 }
 
@@ -846,7 +985,7 @@ function viewData() {
           <button class="btn" data-action="import">ファイルから読み込む</button>
         </div>
         <input type="file" id="importFile" accept="application/json,.json" hidden>
-        <p class="muted">キャラ ${state.characters.length} 体・パーティ ${state.parties.length} 個・バンクの実 ${state.bank.length} 種類・使用量 約 ${Math.ceil(used / 1024)} KB</p>
+        <p class="muted">キャラ ${state.characters.length} 体・パーティ ${state.parties.length} 個・バンクの実 ${state.bank.length} 種類${state.accounts.length ? `・アカウント ${state.accounts.length} 個` : ''}・使用量 約 ${Math.ceil(used / 1024)} KB</p>
       </div>
       <div class="card">
         <h3 class="card-title">全部消す</h3>
@@ -871,6 +1010,7 @@ function render() {
   const views = {
     parties: viewParties,
     party: () => viewParty(id),
+    char: () => viewChar(id),
     todo: viewTodo,
     bank: viewBank,
     chars: viewChars,
@@ -880,7 +1020,7 @@ function render() {
   const app = $('#app');
   app.innerHTML = (views[name] || viewParties)();
 
-  const tab = name === 'party' ? 'parties' : name;
+  const tab = name === 'party' ? 'parties' : name === 'char' ? 'chars' : name;
   $$('.tabbar a').forEach((a) => {
     const on = a.dataset.tab === tab;
     a.classList.toggle('active', on);
@@ -934,6 +1074,8 @@ function openCharDialog(c, onSaved) {
   form.elements.hit.value = c?.hit || DATA.hits[0];
   form.elements.type.value = c?.type || DATA.types[0];
   form.elements.memo.value = c?.memo || '';
+  form.elements.account.innerHTML = options(accountChoices(), c?.accountId ?? defaultAccount());
+  form.elements.account.closest('.field').hidden = !state.accounts.length;
   charSaved = onSaved || null;
   dlg.showModal();
   setTimeout(() => form.elements.name.focus(), 50);
@@ -947,14 +1089,15 @@ $('#charForm').addEventListener('submit', (e) => {
     race: f.race.value.trim(),
     hit: f.hit.value,
     type: f.type.value,
-    memo: f.memo.value.trim()
+    memo: f.memo.value.trim(),
+    accountId: accountById(f.account.value) ? f.account.value : ''
   };
   if (!data.name || !data.race) return;
   let c = charById(f.id.value);
   if (c) {
     Object.assign(c, data);
   } else {
-    c = { id: uid(), ...data };
+    c = { id: uid(), ...data, plans: [] };
     state.characters.push(c);
   }
   save();
@@ -1001,6 +1144,8 @@ function openBankDialog(b) {
   form.elements.grade.innerHTML = options(DATA.grades, b?.grade || DATA.grades[0]);
   form.elements.count.value = b?.count || 1;
   form.elements.memo.value = b?.memo || '';
+  form.elements.account.innerHTML = options(accountChoices(), b?.accountId ?? defaultAccount());
+  form.elements.account.closest('.field').hidden = !state.accounts.length;
   $('#bankDialog').showModal();
 }
 
@@ -1011,14 +1156,16 @@ $('#bankForm').addEventListener('submit', (e) => {
     fruitId: f.fruit.value,
     grade: f.grade.value,
     count: Math.min(99, Math.max(1, Math.floor(Number(f.count.value)) || 1)),
-    memo: f.memo.value.trim()
+    memo: f.memo.value.trim(),
+    accountId: accountById(f.account.value) ? f.account.value : ''
   };
   if (!data.fruitId || !DATA.grades.includes(data.grade)) return;
   const existing = state.bank.find((x) => x.id === f.id.value);
   if (existing) {
     Object.assign(existing, data);
   } else {
-    const same = state.bank.find((x) => x.fruitId === data.fruitId && x.grade === data.grade && x.memo === data.memo);
+    const same = state.bank.find((x) => x.fruitId === data.fruitId && x.grade === data.grade
+      && x.memo === data.memo && x.accountId === data.accountId);
     if (same) same.count = Math.min(99, same.count + data.count);
     else state.bank.push({ id: uid(), ...data });
   }
@@ -1029,6 +1176,33 @@ $('#bankForm').addEventListener('submit', (e) => {
     .filter((x) => x.entry.fruitId === data.fruitId && x.entry.grade === data.grade)
     .reduce((sum, x) => sum + x.targets.length, 0);
   toast(n ? `移せば完了になるキャラが${n}体見つかりました` : 'バンクに登録しました');
+});
+
+// キャラ一覧をアカウントで絞り込んでいるときは、新しく登録するものもそのアカウントにする
+const defaultAccount = () => (charFilter !== 'all' && accountById(charFilter) ? charFilter : '');
+
+function openAccountDialog(a) {
+  const form = $('#accountForm');
+  form.reset();
+  $('#accountDialogTitle').textContent = a ? 'アカウントを編集' : 'アカウントを追加';
+  form.elements.id.value = a?.id || '';
+  form.elements.name.value = a?.name || '';
+  form.elements.memo.value = a?.memo || '';
+  $('#accountDialog').showModal();
+}
+
+$('#accountForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const f = e.target.elements;
+  const data = { name: f.name.value.trim(), memo: f.memo.value.trim() };
+  if (!data.name) return;
+  const existing = accountById(f.id.value);
+  if (existing) Object.assign(existing, data);
+  else state.accounts.push({ id: uid(), ...data });
+  save();
+  closeSheet($('#accountDialog'));
+  render();
+  toast(`${data.name}を保存しました`);
 });
 
 function themeSetting() {
@@ -1045,7 +1219,17 @@ function themeSetting() {
 function setPlan(party, i, k, key, value) {
   const member = party.members[i];
   plansOf(member);
-  const p = member.plans[k];
+  applyPlan(member.plans[k], key, value);
+  touch(party);
+}
+
+function setCharPlan(c, k, key, value) {
+  plansOf(c);
+  applyPlan(c.plans[k], key, value);
+  save();
+}
+
+function applyPlan(p, key, value) {
   if (key === 'fruitId') {
     p.fruitId = value;
     if (value && !p.target) p.target = '特級L';
@@ -1058,7 +1242,6 @@ function setPlan(party, i, k, key, value) {
   } else {
     p[key] = value;
   }
-  touch(party);
 }
 
 const actions = {
@@ -1130,6 +1313,9 @@ const actions = {
         m.plans = m.plans.map((pl) => (pl.fruitId === fr.id ? emptyPlan() : pl));
       }
     }
+    for (const c of state.characters) {
+      c.plans = (c.plans || []).map((pl) => (pl.fruitId === fr.id ? emptyPlan() : pl));
+    }
     save();
     render();
   },
@@ -1163,6 +1349,26 @@ const actions = {
     } catch (e) { /* 保存できなくても、この表示中だけは切り替える */ }
     if (v) document.documentElement.setAttribute('data-theme', v);
     else document.documentElement.removeAttribute('data-theme');
+    render();
+  },
+  'new-account'() {
+    openAccountDialog(null);
+  },
+  'edit-account'(el) {
+    openAccountDialog(accountById(el.dataset.id));
+  },
+  'delete-account'(el) {
+    const a = accountById(el.dataset.id);
+    if (!a || !confirm(`「${a.name}」を削除しますか？\nこのアカウントのキャラとバンクの実は「メイン」に移ります。`)) return;
+    state.accounts = state.accounts.filter((x) => x !== a);
+    for (const c of state.characters) if (c.accountId === a.id) c.accountId = '';
+    for (const b of state.bank) if (b.accountId === a.id) b.accountId = '';
+    if (charFilter === a.id) charFilter = 'all';
+    save();
+    render();
+  },
+  'char-filter'(el) {
+    charFilter = el.dataset.value;
     render();
   },
   'todo-filter'(el) {
@@ -1262,10 +1468,18 @@ document.addEventListener('change', (e) => {
     return;
   }
 
-  if (el.dataset.plan && name === 'party') {
+  if (el.dataset.plan && name === 'party' && !el.dataset.char) {
     const party = partyById(id);
     if (!party) return;
     setPlan(party, Number(el.dataset.slot), Number(el.dataset.k), el.dataset.plan, el.value);
+    render();
+    return;
+  }
+
+  if (el.dataset.plan && el.dataset.char) {
+    const c = charById(el.dataset.char);
+    if (!c) return;
+    setCharPlan(c, Number(el.dataset.k), el.dataset.plan, el.value);
     render();
     return;
   }
@@ -1274,6 +1488,14 @@ document.addEventListener('change', (e) => {
     const party = partyById(el.dataset.todo);
     if (!party) return;
     setPlan(party, Number(el.dataset.slot), Number(el.dataset.k), 'status', el.value);
+    render();
+    return;
+  }
+
+  if (el.dataset.todoChar) {
+    const c = charById(el.dataset.todoChar);
+    if (!c) return;
+    setCharPlan(c, Number(el.dataset.k), 'status', el.value);
     render();
   }
 });

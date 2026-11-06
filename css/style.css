@@ -692,3 +692,28 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .45); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; }
 }
+
+/* ---------- キャラ単体で狙う実 ---------- */
+
+a.plain { color: inherit; text-decoration: none; }
+.char-card .small-btn { margin-top: 10px; min-height: 36px; font-size: .85rem; color: var(--primary-text); }
+.wish-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 2px; }
+.wish {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  font-size: .82rem; font-weight: 700;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--primary-soft); color: var(--primary-text);
+}
+.wish small { font-size: .72rem; font-weight: 600; opacity: .8; }
+.wish.status-done { background: var(--ok-soft); color: var(--ok); }
+.wish.status-doing { background: var(--accent-soft); color: var(--accent); }
+.fruit-list a.fruit-actions { font-size: .82rem; }
+
+/* ---------- アカウント（サブ垢） ---------- */
+
+.chip-account, .badge.account { background: var(--surface-2); color: var(--text); }
+.seg.wrap { display: flex; flex-wrap: wrap; border-radius: 16px; margin-bottom: 12px; }
+.seg.wrap button { flex: 0 1 auto; }
+.accounts-card { margin-top: 16px; }
+.accounts-card .section-head { align-items: flex-start; }
+.fruit-list .account-memo { width: 100%; margin: 2px 0 0; }

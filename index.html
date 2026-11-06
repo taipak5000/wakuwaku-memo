@@ -69,6 +69,10 @@
         <span>メモ（任意）</span>
         <textarea name="memo" rows="2" maxlength="300" placeholder="例：今ついている実、運極かどうか など"></textarea>
       </label>
+      <label class="field">
+        <span>持っているアカウント（任意）</span>
+        <select name="account"></select>
+      </label>
       <input type="hidden" name="id">
       <div class="dialog-actions">
         <button type="button" class="btn ghost" data-action="close-dialog">やめる</button>
@@ -126,6 +130,30 @@
       <label class="field">
         <span>メモ（任意）</span>
         <input name="memo" maxlength="60" autocomplete="off" placeholder="例：〇〇から外した">
+      </label>
+      <label class="field" data-account-field>
+        <span>どのアカウントのバンクか</span>
+        <select name="account"></select>
+      </label>
+      <input type="hidden" name="id">
+      <div class="dialog-actions">
+        <button type="button" class="btn ghost" data-action="close-dialog">やめる</button>
+        <button type="submit" class="btn primary" value="save">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- アカウント（メイン・サブ垢） -->
+  <dialog id="accountDialog" class="sheet">
+    <form method="dialog" id="accountForm">
+      <h2 id="accountDialogTitle">アカウントを追加</h2>
+      <label class="field">
+        <span>アカウント名</span>
+        <input name="name" required maxlength="20" autocomplete="off" placeholder="例：サブ垢1">
+      </label>
+      <label class="field">
+        <span>メモ（任意）</span>
+        <textarea name="memo" rows="4" maxlength="500" placeholder="例：ランク、引き継ぎ方法、所持しているキャラや運極など"></textarea>
       </label>
       <input type="hidden" name="id">
       <div class="dialog-actions">
