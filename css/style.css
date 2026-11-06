@@ -592,7 +592,7 @@ dialog.sheet h2 { font-size: 1.1rem; margin-bottom: 14px; }
 .offline-badge { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
 
 .tabbar {
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   background: var(--glass);
   border-top: 0.5px solid var(--line);
   backdrop-filter: blur(20px) saturate(180%);
@@ -692,3 +692,62 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .45); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; }
 }
+
+/* ---------- キャラ単体で狙う実 ---------- */
+
+a.plain { color: inherit; text-decoration: none; }
+.char-card .small-btn { margin-top: 10px; min-height: 36px; font-size: .85rem; color: var(--primary-text); }
+.wish-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 2px; }
+.wish {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  font-size: .82rem; font-weight: 700;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--primary-soft); color: var(--primary-text);
+}
+.wish small { font-size: .72rem; font-weight: 600; opacity: .8; }
+.wish.status-done { background: var(--ok-soft); color: var(--ok); }
+.wish.status-doing { background: var(--accent-soft); color: var(--accent); }
+.fruit-list a.fruit-actions { font-size: .82rem; }
+
+/* ---------- アカウント（サブ垢） ---------- */
+
+.chip-account, .badge.account { background: var(--surface-2); color: var(--text); }
+.seg.wrap { display: flex; flex-wrap: wrap; border-radius: 16px; margin-bottom: 12px; }
+.seg.wrap button { flex: 0 1 auto; }
+.accounts-card { margin-top: 16px; }
+.accounts-card .section-head { align-items: flex-start; }
+.fruit-list .account-memo { width: 100%; margin: 2px 0 0; }
+
+/* ---------- キャラが主役の画面 ---------- */
+
+.add-char { display: flex; gap: 8px; align-items: center; padding: 10px; }
+.add-char input { flex: 1; min-width: 0; }
+
+.char-card-head h3 { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.char-card .plans { margin-top: 10px; }
+a.icon-btn { display: inline-grid; place-items: center; text-decoration: none; }
+.add-plan { margin-top: 10px; width: 100%; color: var(--primary-text); background: var(--primary-soft); }
+
+.star {
+  appearance: none; border: 0; background: none; cursor: pointer; flex: none;
+  width: 36px; height: 36px; border-radius: 50%; padding: 0;
+  font-size: 1.35rem; line-height: 1; color: var(--muted);
+  transition: transform .12s var(--ease);
+}
+.star:active { transform: scale(0.88); }
+.star.on { color: #F5A400; }
+.card.is-priority { box-shadow: inset 0 0 0 1.5px rgba(245, 164, 0, .55), var(--shadow); }
+.todo-head .star { margin-left: -6px; }
+
+.name-input { flex: 1; min-width: 0; font-size: 1.2rem; font-weight: 800; background: transparent; border-color: transparent; }
+.name-input:hover { border-color: var(--line); }
+
+details.attrs > summary { cursor: pointer; font-weight: 800; list-style: none; }
+details.attrs > summary::-webkit-details-marker { display: none; }
+details.attrs > summary::before { content: "›"; display: inline-block; margin-right: 8px; color: var(--muted); transition: transform .2s var(--ease); }
+details.attrs[open] > summary::before { transform: rotate(90deg); }
+details.attrs[open] > summary { margin-bottom: 8px; }
+/* 実の行は1行に収める（削除ボタンが下に落ちないように） */
+.char-card .plan-top, .plans .plan-top { flex-wrap: nowrap; }
+.plan-top .plan-fruit { flex: 1 1 auto; min-width: 0; }
+.plan-top .icon-btn { width: 32px; height: 32px; }
