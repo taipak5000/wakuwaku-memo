@@ -5,13 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>わくわく厳選メモ</title>
   <meta name="description" content="モンストのわくわくの実を、パーティの種族・撃種・戦型の相性を見ながら厳選するためのメモ">
-  <meta name="theme-color" content="#1f6f5c" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#14211d" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#F4F3F8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0F0E14" media="(prefers-color-scheme: dark)">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="わくわくメモ">
+  <script>
+    // 描画前にテーマ（ライト／ダーク）を確定させ、ちらつきを防ぐ
+    (function () {
+      try {
+        var t = localStorage.getItem('wakuwaku-memo:theme');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) { /* 保存が使えない環境では端末の設定に従う */ }
+    })();
+  </script>
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -28,8 +37,9 @@
   <nav class="tabbar" aria-label="メインメニュー">
     <a href="#/parties" data-tab="parties"><span class="tab-ico" aria-hidden="true">◆</span>パーティ</a>
     <a href="#/todo" data-tab="todo"><span class="tab-ico" aria-hidden="true">✓</span>やること</a>
+    <a href="#/bank" data-tab="bank"><span class="tab-ico" aria-hidden="true">▣</span>バンク</a>
     <a href="#/chars" data-tab="chars"><span class="tab-ico" aria-hidden="true">●</span>キャラ</a>
-    <a href="#/fruits" data-tab="fruits"><span class="tab-ico" aria-hidden="true">✿</span>実の一覧</a>
+    <a href="#/fruits" data-tab="fruits"><span class="tab-ico" aria-hidden="true">✿</span>実</a>
     <a href="#/data" data-tab="data"><span class="tab-ico" aria-hidden="true">⇅</span>データ</a>
   </nav>
 
@@ -86,6 +96,36 @@
       <label class="field">
         <span>効果メモ（任意）</span>
         <input name="desc" maxlength="80" autocomplete="off">
+      </label>
+      <input type="hidden" name="id">
+      <div class="dialog-actions">
+        <button type="button" class="btn ghost" data-action="close-dialog">やめる</button>
+        <button type="submit" class="btn primary" value="save">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- わくわくバンクの実 -->
+  <dialog id="bankDialog" class="sheet">
+    <form method="dialog" id="bankForm">
+      <h2 id="bankDialogTitle">バンクに実を登録</h2>
+      <label class="field">
+        <span>実</span>
+        <select name="fruit" required></select>
+      </label>
+      <div class="field-row">
+        <label class="field">
+          <span>等級</span>
+          <select name="grade" required></select>
+        </label>
+        <label class="field">
+          <span>個数</span>
+          <input name="count" type="number" inputmode="numeric" min="1" max="99" value="1" required>
+        </label>
+      </div>
+      <label class="field">
+        <span>メモ（任意）</span>
+        <input name="memo" maxlength="60" autocomplete="off" placeholder="例：〇〇から外した">
       </label>
       <input type="hidden" name="id">
       <div class="dialog-actions">

@@ -6,6 +6,7 @@
    ========================================================= */
 
 const STORE_KEY = 'wakuwaku-memo:v1';
+const THEME_KEY = 'wakuwaku-memo:theme';
 const PARTY_SIZE = 4;
 const BOND_SCOPES = ['race', 'hit', 'type'];
 
@@ -19,7 +20,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 /* ---------- 状態 ---------- */
 
 function defaultState() {
-  return { version: 1, settings: { slotCount: 3 }, characters: [], customFruits: [], parties: [] };
+  return { version: 1, settings: { slotCount: 3 }, characters: [], customFruits: [], parties: [], bank: [] };
 }
 
 function emptyPlan() {
@@ -93,6 +94,17 @@ function normalize(raw) {
       });
       return party;
     });
+
+  // わくわくバンクに入れている実
+  s.bank = (Array.isArray(raw.bank) ? raw.bank : [])
+    .filter((b) => b && typeof b === 'object' && b.fruitId && gradeOk(b.grade))
+    .map((b) => ({
+      id: String(b.id || uid()),
+      fruitId: String(b.fruitId),
+      grade: b.grade,
+      count: Math.min(99, Math.max(1, Math.floor(Number(b.count)) || 1)),
+      memo: String(b.memo ?? '').slice(0, 60)
+    }));
   return s;
 }
 
@@ -283,6 +295,78 @@ function partyHints(party, a) {
   return hints;
 }
 
+/* ---------- わくわくバンク：移せば厳選完了になるものを探す ---------- */
+
+// 実はキャラにつくので、同じキャラ×同じ実は複数のパーティにまたがっていても1つの狙いにまとめる。
+// gradeRank は高い等級ほど小さい（未設定は 999）。
+function collectTargets() {
+  const map = new Map();
+  for (const party of state.parties) {
+    party.members.forEach((m, i) => {
+      const c = charById(m.charId);
+      if (!c) return;
+      plansOf(m).forEach((p, k) => {
+        if (!p.fruitId || !fruitById(p.fruitId)) return;
+        const key = `${c.id}|${p.fruitId}`;
+        if (!map.has(key)) map.set(key, { key, c, fruitId: p.fruitId, target: 999, current: 999, refs: [], parties: [] });
+        const t = map.get(key);
+        if (p.target) t.target = Math.min(t.target, gradeRank(p.target));
+        if (p.current) t.current = Math.min(t.current, gradeRank(p.current));
+        if (p.status === 'done') return;
+        t.refs.push({ party, i, k });
+        if (!t.parties.includes(party)) t.parties.push(party);
+      });
+    });
+  }
+  return [...map.values()].filter((t) => t.refs.length && !(t.target < 999 && t.current <= t.target));
+}
+
+function bankMatches() {
+  const targets = collectTargets();
+  const complete = [];
+  const upgrade = [];
+  const done = new Set();
+  for (const entry of state.bank) {
+    const r = gradeRank(entry.grade);
+    const same = targets.filter((t) => t.fruitId === entry.fruitId && t.target < 999);
+    const ok = same.filter((t) => r <= t.target);
+    if (ok.length) {
+      complete.push({ entry, targets: ok });
+      ok.forEach((t) => done.add(t.key));
+    }
+  }
+  for (const entry of state.bank) {
+    const r = gradeRank(entry.grade);
+    const up = targets.filter((t) => t.fruitId === entry.fruitId && t.target < 999
+      && r > t.target && r < t.current && !done.has(t.key));
+    if (up.length) upgrade.push({ entry, targets: up });
+  }
+  const noTarget = targets.filter((t) => t.target === 999 && state.bank.some((b) => b.fruitId === t.fruitId));
+  return { complete, upgrade, noTarget, completeCount: done.size };
+}
+
+// バンクの実が、目標に届く等級で入っているか
+const bankCovers = (fruitId, target) =>
+  !!target && state.bank.some((b) => b.fruitId === fruitId && gradeRank(b.grade) <= gradeRank(target));
+
+function moveFromBank(entryId, key) {
+  const entry = state.bank.find((b) => b.id === entryId);
+  const t = collectTargets().find((x) => x.key === key);
+  if (!entry || !t) return;
+  const before = JSON.stringify(state);
+  for (const { party, i, k } of t.refs) setPlan(party, i, k, 'current', entry.grade);
+  entry.count -= 1;
+  if (entry.count <= 0) state.bank = state.bank.filter((b) => b !== entry);
+  save();
+  render();
+  const f = fruitById(entry.fruitId);
+  toast(`${t.c.name}に${f ? f.short : '実'}（${entry.grade}）を移しました`, () => {
+    state = normalize(JSON.parse(before));
+    save();
+    render();
+  });
+}
+
 /* ---------- 表示部品 ---------- */
 
 function chips(c) {
@@ -302,7 +386,7 @@ function options(list, selected, placeholder) {
   }).join('');
 }
 
-function fruitOptions(selected) {
+function fruitOptions(selected, placeholder = '— 狙う実を選ぶ —') {
   const groupsDef = [
     ['同族の絆', (f) => f.scope === 'race' && !f.custom],
     ['撃種の絆', (f) => f.scope === 'hit' && !f.custom],
@@ -312,7 +396,7 @@ function fruitOptions(selected) {
     ['自分で追加した実', (f) => f.custom]
   ];
   const fruits = allFruits();
-  let html = `<option value="">— 狙う実を選ぶ —</option>`;
+  let html = `<option value="">${esc(placeholder)}</option>`;
   for (const [label, test] of groupsDef) {
     const list = fruits.filter(test);
     if (!list.length) continue;
@@ -543,6 +627,7 @@ function viewTodo() {
               <div class="todo-main">
                 <b>${esc(r.f.short)}</b>
                 <span class="grade">${esc(r.p.current || 'なし')} → ${esc(r.p.target || '未設定')}</span>
+                ${r.p.status !== 'done' && bankCovers(r.p.fruitId, r.p.target) ? '<a class="badge in-bank" href="#/bank">バンクにあり</a>' : ''}
               </div>
               <div class="todo-sub">
                 <a href="#/party/${esc(r.party.id)}">${esc(r.party.name)}</a>
@@ -569,6 +654,80 @@ function viewTodo() {
         todoFilter === 'open' ? '未完了の厳選はありません。' : 'まだ狙う実が登録されていません。',
         '<a class="btn" href="#/parties">パーティを開く</a>'
       )}
+    </section>`;
+}
+
+/* ---------- 画面：わくわくバンク ---------- */
+
+function viewBank() {
+  const { complete, upgrade, noTarget, completeCount } = bankMatches();
+  const total = state.bank.reduce((n, b) => n + b.count, 0);
+  const upgradeCount = new Set(upgrade.flatMap((x) => x.targets.map((t) => t.key))).size;
+  const gradeText = (rank) => (rank < 999 ? DATA.grades[rank] : 'なし');
+
+  const entryCard = ({ entry, targets }, isComplete) => {
+    const f = fruitById(entry.fruitId);
+    return `
+      <article class="card bank-hit${isComplete ? ' is-complete' : ''}">
+        <div class="bank-hit-head">
+          <b>${esc(f ? f.short : '（消した実）')}</b>
+          <span class="badge grade-badge">${esc(entry.grade)}</span>
+          <span class="badge self">×${entry.count}</span>
+          ${targets.length > entry.count ? `<span class="badge bond">候補${targets.length}体に${entry.count}個</span>` : ''}
+        </div>
+        <ul class="bank-targets">
+          ${targets.map((t) => `
+            <li>
+              <div class="bank-target-main">
+                <b>${esc(t.c.name)}</b>
+                <span class="grade">今 ${esc(gradeText(t.current))} → 目標 ${esc(gradeText(t.target))}</span>
+                <span class="party-meta">${t.parties.map((p) => `<a href="#/party/${esc(p.id)}">${esc(p.name)}</a>`).join('、')}</span>
+              </div>
+              <button class="btn${isComplete ? ' primary' : ''}" data-action="bank-move" data-id="${esc(entry.id)}" data-key="${esc(t.key)}">移した</button>
+            </li>`).join('')}
+        </ul>
+      </article>`;
+  };
+
+  const list = state.bank.map((b) => {
+    const f = fruitById(b.fruitId);
+    return `
+      <li>
+        <b>${esc(f ? f.short : '（消した実）')}</b>
+        <span>${esc(b.grade)}・${b.count}個${b.memo ? `・${esc(b.memo)}` : ''}</span>
+        <span class="fruit-actions">
+          <button class="icon-btn" data-action="edit-bank" data-id="${esc(b.id)}" aria-label="編集">✎</button>
+          <button class="icon-btn danger" data-action="delete-bank" data-id="${esc(b.id)}" aria-label="削除">×</button>
+        </span>
+      </li>`;
+  }).join('');
+
+  return `
+    <section>
+      <div class="section-head">
+        <h2>わくわくバンク</h2>
+        <button class="btn primary" data-action="new-bank">＋ 実を登録</button>
+      </div>
+      <p class="muted lead">バンクに入れている実を登録すると、パーティで狙っている実と照らし合わせて、移せば厳選が終わるキャラを探します。</p>
+      <div class="stats">
+        <div class="stat"><span>バンクの実</span><b>${total}</b></div>
+        <div class="stat ok"><span>移せば完了</span><b>${completeCount}</b></div>
+        <div class="stat"><span>等級が上がる</span><b>${upgradeCount}</b></div>
+      </div>
+
+      <h3 class="group-title">移せば厳選完了</h3>
+      ${complete.length ? `<div class="stack">${complete.map((x) => entryCard(x, true)).join('')}</div>`
+        : `<p class="muted">${state.bank.length ? '今のバンクの中に、移せば目標の等級に届く実はありません。' : 'バンクの実を登録すると、ここに候補が出ます。'}</p>`}
+
+      ${upgrade.length ? `<h3 class="group-title">目標には届かないが、今より等級が上がる</h3>
+        <div class="stack">${upgrade.map((x) => entryCard(x, false)).join('')}</div>` : ''}
+
+      ${noTarget.length ? `<p class="muted small">目標の等級が未設定なので判定していない枠：${noTarget.map((t) => `${esc(t.c.name)}の${esc(fruitById(t.fruitId).short)}`).join('、')}</p>` : ''}
+
+      <div class="card">
+        <h3 class="card-title">バンクに入っている実</h3>
+        ${list ? `<ul class="fruit-list">${list}</ul>` : '<p class="muted">まだ登録されていません。</p>'}
+      </div>
     </section>`;
 }
 
@@ -665,6 +824,13 @@ function viewData() {
     <section>
       <h2>データ</h2>
       <div class="card">
+        <h3 class="card-title">表示</h3>
+        <div class="seg" role="group" aria-label="テーマ">
+          ${[['', '端末に合わせる'], ['light', 'ライト'], ['dark', 'ダーク']].map(([v, l]) =>
+            `<button class="${themeSetting() === v ? 'on' : ''}" data-action="theme" data-value="${v}">${l}</button>`).join('')}
+        </div>
+      </div>
+      <div class="card">
         <h3 class="card-title">実の枠の数</h3>
         <div class="seg" role="group" aria-label="実の枠の数">
           <button class="${state.settings.slotCount === 3 ? 'on' : ''}" data-action="slot-count" data-value="3">3つ</button>
@@ -680,7 +846,7 @@ function viewData() {
           <button class="btn" data-action="import">ファイルから読み込む</button>
         </div>
         <input type="file" id="importFile" accept="application/json,.json" hidden>
-        <p class="muted">キャラ ${state.characters.length} 体・パーティ ${state.parties.length} 個・使用量 約 ${Math.ceil(used / 1024)} KB</p>
+        <p class="muted">キャラ ${state.characters.length} 体・パーティ ${state.parties.length} 個・バンクの実 ${state.bank.length} 種類・使用量 約 ${Math.ceil(used / 1024)} KB</p>
       </div>
       <div class="card">
         <h3 class="card-title">全部消す</h3>
@@ -706,6 +872,7 @@ function render() {
     parties: viewParties,
     party: () => viewParty(id),
     todo: viewTodo,
+    bank: viewBank,
     chars: viewChars,
     fruits: viewFruits,
     data: viewData
@@ -736,6 +903,23 @@ window.addEventListener('hashchange', () => {
 });
 
 /* ---------- ダイアログ ---------- */
+
+// 開くときと同じ経路（下へスライド）で閉じてから、dialog を閉じる
+function closeSheet(dlg) {
+  if (!dlg?.open || dlg.classList.contains('closing')) return;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    dlg.close();
+    return;
+  }
+  dlg.classList.add('closing');
+  const done = (e) => {
+    if (e.target !== dlg) return;
+    dlg.removeEventListener('animationend', done);
+    dlg.classList.remove('closing');
+    dlg.close();
+  };
+  dlg.addEventListener('animationend', done);
+}
 
 let charSaved = null;
 
@@ -774,7 +958,7 @@ $('#charForm').addEventListener('submit', (e) => {
     state.characters.push(c);
   }
   save();
-  $('#charDialog').close();
+  closeSheet($('#charDialog'));
   if (charSaved) charSaved(c);
   charSaved = null;
   render();
@@ -804,9 +988,57 @@ $('#fruitForm').addEventListener('submit', (e) => {
   if (existing) Object.assign(existing, data);
   else state.customFruits.push({ id: `custom-${uid()}`, ...data });
   save();
-  $('#fruitDialog').close();
+  closeSheet($('#fruitDialog'));
   render();
 });
+
+function openBankDialog(b) {
+  const form = $('#bankForm');
+  form.reset();
+  $('#bankDialogTitle').textContent = b ? 'バンクの実を編集' : 'バンクに実を登録';
+  form.elements.id.value = b?.id || '';
+  form.elements.fruit.innerHTML = fruitOptions(b?.fruitId || '', '— 実を選ぶ —');
+  form.elements.grade.innerHTML = options(DATA.grades, b?.grade || DATA.grades[0]);
+  form.elements.count.value = b?.count || 1;
+  form.elements.memo.value = b?.memo || '';
+  $('#bankDialog').showModal();
+}
+
+$('#bankForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const f = e.target.elements;
+  const data = {
+    fruitId: f.fruit.value,
+    grade: f.grade.value,
+    count: Math.min(99, Math.max(1, Math.floor(Number(f.count.value)) || 1)),
+    memo: f.memo.value.trim()
+  };
+  if (!data.fruitId || !DATA.grades.includes(data.grade)) return;
+  const existing = state.bank.find((x) => x.id === f.id.value);
+  if (existing) {
+    Object.assign(existing, data);
+  } else {
+    const same = state.bank.find((x) => x.fruitId === data.fruitId && x.grade === data.grade && x.memo === data.memo);
+    if (same) same.count = Math.min(99, same.count + data.count);
+    else state.bank.push({ id: uid(), ...data });
+  }
+  save();
+  closeSheet($('#bankDialog'));
+  render();
+  const n = bankMatches().complete
+    .filter((x) => x.entry.fruitId === data.fruitId && x.entry.grade === data.grade)
+    .reduce((sum, x) => sum + x.targets.length, 0);
+  toast(n ? `移せば完了になるキャラが${n}体見つかりました` : 'バンクに登録しました');
+});
+
+function themeSetting() {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    return v === 'light' || v === 'dark' ? v : '';
+  } catch (e) {
+    return '';
+  }
+}
 
 /* ---------- 操作 ---------- */
 
@@ -890,14 +1122,47 @@ const actions = {
   },
   'delete-fruit'(el) {
     const fr = state.customFruits.find((f) => f.id === el.dataset.id);
-    if (!fr || !confirm(`「${fr.name}」を削除しますか？\nこの実を狙っているメモも空欄に戻ります。`)) return;
+    if (!fr || !confirm(`「${fr.name}」を削除しますか？\nこの実を狙っているメモも空欄に戻り、バンクからも消えます。`)) return;
     state.customFruits = state.customFruits.filter((f) => f !== fr);
+    state.bank = state.bank.filter((b) => b.fruitId !== fr.id);
     for (const p of state.parties) {
       for (const m of p.members) {
         m.plans = m.plans.map((pl) => (pl.fruitId === fr.id ? emptyPlan() : pl));
       }
     }
     save();
+    render();
+  },
+  'new-bank'() {
+    openBankDialog(null);
+  },
+  'edit-bank'(el) {
+    openBankDialog(state.bank.find((b) => b.id === el.dataset.id));
+  },
+  'delete-bank'(el) {
+    const b = state.bank.find((x) => x.id === el.dataset.id);
+    if (!b) return;
+    const before = JSON.stringify(state);
+    state.bank = state.bank.filter((x) => x !== b);
+    save();
+    render();
+    toast('バンクの実を消しました', () => {
+      state = normalize(JSON.parse(before));
+      save();
+      render();
+    });
+  },
+  'bank-move'(el) {
+    moveFromBank(el.dataset.id, el.dataset.key);
+  },
+  theme(el) {
+    const v = el.dataset.value;
+    try {
+      if (v) localStorage.setItem(THEME_KEY, v);
+      else localStorage.removeItem(THEME_KEY);
+    } catch (e) { /* 保存できなくても、この表示中だけは切り替える */ }
+    if (v) document.documentElement.setAttribute('data-theme', v);
+    else document.documentElement.removeAttribute('data-theme');
     render();
   },
   'todo-filter'(el) {
@@ -935,7 +1200,7 @@ const actions = {
     toast('データを消しました');
   },
   'close-dialog'(el) {
-    el.closest('dialog')?.close();
+    closeSheet(el.closest('dialog'));
   }
 };
 
@@ -1025,19 +1290,33 @@ document.addEventListener('input', (e) => {
 // ダイアログの外側（背景）をタップしたら閉じる
 $$('dialog').forEach((dlg) => {
   dlg.addEventListener('click', (e) => {
-    if (e.target === dlg) dlg.close();
+    if (e.target === dlg) closeSheet(dlg);
+  });
+  dlg.addEventListener('cancel', (e) => {
+    e.preventDefault();
+    closeSheet(dlg);
   });
 });
 
 /* ---------- トースト・オフライン表示 ---------- */
 
 let toastTimer = null;
-function toast(text) {
+function toast(text, undo) {
   const t = $('#toast');
   t.textContent = text;
+  if (undo) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = '元に戻す';
+    b.addEventListener('click', () => {
+      undo();
+      t.classList.remove('show');
+    });
+    t.append(b);
+  }
   t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), 2400);
+  toastTimer = setTimeout(() => t.classList.remove('show'), undo ? 5000 : 2400);
 }
 
 function updateOnline() {

@@ -1,55 +1,86 @@
-/* わくわく厳選メモ */
+/* わくわく厳選メモ
+   配色・角丸・ガラス素材は tai-hub（css/tokens.css・css/chrome.css）に合わせている。 */
 
 :root {
-  --bg: #f5f1e8;
-  --surface: #fffdf8;
-  --surface-2: #f0ebdf;
-  --line: #e2dbcc;
-  --text: #2a2620;
-  --muted: #7a7266;
-  --primary: #1f6f5c;
-  --primary-ink: #ffffff;
-  --primary-soft: #dcefe8;
-  --accent: #e9822a;
-  --accent-soft: #fdeedd;
-  --danger: #c2412d;
-  --danger-soft: #fbe5e0;
-  --ref: #2f6fd0;
-  --ref-soft: #e3edfb;
-  --pen: #c23c5b;
-  --pen-soft: #fae3e9;
-  --ok: #2c8a4b;
-  --ok-soft: #e1f3e6;
-  --shadow: 0 1px 2px rgba(60, 45, 20, .06), 0 4px 14px rgba(60, 45, 20, .06);
-  --radius: 14px;
+  --bg: #F4F3F8;
+  --surface: #FFFFFF;
+  --surface-2: #EEEDF3;
+  --glass: rgba(255, 255, 255, 0.72);
+  --line: rgba(60, 60, 67, 0.12);
+  --text: #1C1C1E;
+  --muted: #6E6E73;
+  --primary: #6C63D8;
+  --primary-ink: #FFFFFF;
+  --primary-text: #5B52C9;
+  --primary-soft: rgba(108, 99, 216, 0.10);
+  --accent: #B25000;
+  --accent-soft: rgba(255, 149, 0, 0.14);
+  --danger: #D70015;
+  --danger-soft: rgba(255, 69, 58, 0.12);
+  --ref: #0062CC;
+  --ref-soft: rgba(0, 122, 255, 0.12);
+  --pen: #C2185B;
+  --pen-soft: rgba(255, 45, 85, 0.12);
+  --ok: #248A3D;
+  --ok-soft: rgba(52, 199, 89, 0.14);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --radius: 16px;
   --tabbar-h: 62px;
+  --ease: cubic-bezier(0.25, 1, 0.5, 1);
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #111916;
-    --surface: #18231f;
-    --surface-2: #202d28;
-    --line: #2c3b35;
-    --text: #e9eee9;
-    --muted: #96a59d;
-    --primary: #4cc3a2;
-    --primary-ink: #0d1a16;
-    --primary-soft: #1d3a32;
-    --accent: #f3a15a;
-    --accent-soft: #3a2a1a;
-    --danger: #ef7a66;
-    --danger-soft: #3b211c;
-    --ref: #7fb0f5;
-    --ref-soft: #1c2b44;
-    --pen: #f08aa2;
-    --pen-soft: #3d1f28;
-    --ok: #6fd18f;
-    --ok-soft: #1b3524;
-    --shadow: 0 1px 2px rgba(0, 0, 0, .3);
+    --bg: #0F0E14;
+    --surface: #1C1B22;
+    --surface-2: #2A2932;
+    --glass: rgba(28, 27, 34, 0.68);
+    --line: rgba(255, 255, 255, 0.14);
+    --text: #F2F2F7;
+    --muted: #98989D;
+    --primary: #9B93FF;
+    --primary-ink: #14121F;
+    --primary-text: #A9A2FF;
+    --primary-soft: rgba(155, 147, 255, 0.16);
+    --accent: #FF9F0A;
+    --accent-soft: rgba(255, 159, 10, 0.16);
+    --danger: #FF453A;
+    --danger-soft: rgba(255, 69, 58, 0.16);
+    --ref: #64A8FF;
+    --ref-soft: rgba(10, 132, 255, 0.18);
+    --pen: #FF6F9C;
+    --pen-soft: rgba(255, 55, 95, 0.18);
+    --ok: #30D158;
+    --ok-soft: rgba(48, 209, 88, 0.16);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #0F0E14;
+  --surface: #1C1B22;
+  --surface-2: #2A2932;
+  --glass: rgba(28, 27, 34, 0.68);
+  --line: rgba(255, 255, 255, 0.14);
+  --text: #F2F2F7;
+  --muted: #98989D;
+  --primary: #9B93FF;
+  --primary-ink: #14121F;
+  --primary-text: #A9A2FF;
+  --primary-soft: rgba(155, 147, 255, 0.16);
+  --accent: #FF9F0A;
+  --accent-soft: rgba(255, 159, 10, 0.16);
+  --danger: #FF453A;
+  --danger-soft: rgba(255, 69, 58, 0.16);
+  --ref: #64A8FF;
+  --ref-soft: rgba(10, 132, 255, 0.18);
+  --pen: #FF6F9C;
+  --pen-soft: rgba(255, 55, 95, 0.18);
+  --ok: #30D158;
+  --ok-soft: rgba(48, 209, 88, 0.16);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -60,13 +91,13 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", "Meiryo", Roboto, sans-serif;
   font-size: 15px;
   line-height: 1.6;
   padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 16px);
 }
 
-a { color: var(--primary); }
+a { color: var(--primary-text); }
 
 h1, h2, h3 { margin: 0; line-height: 1.35; }
 h2 { font-size: 1.25rem; }
@@ -543,4 +574,121 @@ dialog.sheet h2 { font-size: 1.1rem; margin-bottom: 14px; }
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
+}
+
+/* =========================================================
+   tai-hub に合わせた見た目
+   ========================================================= */
+
+/* 上下のバーは半透明＋ぼかしのガラス素材（tai-hub の .site-dock と同じ） */
+.topbar {
+  background: var(--glass);
+  color: var(--text);
+  border-bottom: 0.5px solid var(--line);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+}
+.site-title { font-weight: 800; letter-spacing: .02em; }
+.offline-badge { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+
+.tabbar {
+  grid-template-columns: repeat(6, 1fr);
+  background: var(--glass);
+  border-top: 0.5px solid var(--line);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  padding: 4px 6px env(safe-area-inset-bottom);
+}
+.tabbar a { border-radius: 12px; height: calc(var(--tabbar-h) - 8px); font-weight: 700; }
+.tabbar a:active { background: var(--line); }
+.tabbar a.active { color: var(--primary-text); }
+@media (prefers-reduced-transparency: reduce) {
+  .topbar, .tabbar { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+
+h2 { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.01em; }
+.card { border: 0; }
+.card-title { font-weight: 800; }
+.empty { border: 0; background: var(--surface); }
+
+.btn { border: 0; background: var(--surface-2); font-weight: 700; transition: transform .12s var(--ease); }
+.btn:hover { background: var(--surface-2); filter: brightness(0.97); }
+.btn:active, .icon-btn:active { transform: scale(0.96); }
+.btn.danger { border: 0; background: var(--danger-soft); }
+.btn.ghost { background: transparent; color: var(--primary-text); }
+.icon-btn { border: 0; background: var(--surface-2); border-radius: 50%; color: var(--muted); }
+.icon-btn.danger { color: var(--danger); }
+
+input, select, textarea { background: var(--bg); }
+.seg { border-radius: 999px; }
+.seg button { border-radius: 999px; }
+.seg button.on { box-shadow: 0 1px 3px rgba(0, 0, 0, .18); }
+
+.party-card { transition: transform .12s var(--ease); }
+.party-card:active { transform: scale(0.985); }
+.party-card:hover { border-color: transparent; }
+.plan { border-color: var(--line); }
+.chip-type, .badge.quest { color: var(--primary-text); }
+
+/* ボトムシート：開くときと同じ経路で閉じる（app.js の closeSheet が .closing を付ける） */
+dialog.sheet { border-radius: 20px; }
+dialog.sheet[open] { animation: sheetUp .32s var(--ease); }
+dialog.sheet[open]::backdrop { animation: fadeIn .32s var(--ease); }
+dialog.sheet.closing { animation: sheetDown .24s var(--ease) forwards; }
+dialog.sheet.closing::backdrop { animation: fadeOut .24s var(--ease) forwards; }
+dialog.sheet::backdrop { background: rgba(0, 0, 0, .45); }
+@media (max-width: 560px) {
+  dialog.sheet { border-radius: 20px 20px 0 0; }
+}
+@keyframes sheetUp { from { transform: translate3d(0, 100%, 0); } to { transform: none; } }
+@keyframes sheetDown { from { transform: none; } to { transform: translate3d(0, 100%, 0); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+
+.toast {
+  background: rgba(28, 28, 30, .92);
+  color: #fff;
+  border-radius: 999px;
+  padding: 10px 18px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .25);
+}
+.toast.show { pointer-events: auto; }
+.toast button {
+  appearance: none; border: 0; background: none; padding: 0; margin-left: 12px;
+  color: #B9B3FF; font: inherit; font-weight: 800; cursor: pointer;
+}
+
+/* ---------- わくわくバンク ---------- */
+
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 4px; }
+.stat { background: var(--surface); border-radius: var(--radius); padding: 10px 12px; box-shadow: var(--shadow); }
+.stat span { display: block; font-size: .75rem; font-weight: 700; color: var(--muted); }
+.stat b { font-size: 1.7rem; font-weight: 800; line-height: 1.2; }
+.stat.ok b { color: var(--ok); }
+
+.group-title { font-size: .78rem; font-weight: 800; letter-spacing: .05em; color: var(--muted); margin: 20px 4px 8px; }
+
+.bank-hit { border: 1.5px solid transparent; }
+.bank-hit.is-complete { border-color: var(--ok); }
+.bank-hit-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.bank-hit-head b { font-size: 1rem; margin-right: 2px; }
+.badge.grade-badge { background: var(--primary-soft); color: var(--primary-text); }
+.bank-hit.is-complete .btn.primary { background: var(--ok); color: #fff; }
+.bank-targets { list-style: none; margin: 8px 0 0; padding: 0; }
+.bank-targets li {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 0 2px; border-top: 0.5px solid var(--line); margin-top: 8px;
+}
+.bank-target-main { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.bank-target-main .party-meta { width: 100%; margin: 0; }
+
+.badge.in-bank { background: var(--ok-soft); color: var(--ok); text-decoration: none; }
+
+@media (max-width: 380px) {
+  .tabbar a { font-size: .62rem; }
+  .stat b { font-size: 1.4rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; }
 }
