@@ -35,79 +35,12 @@
   <main id="app" class="container" tabindex="-1"></main>
 
   <nav class="tabbar" aria-label="メインメニュー">
-    <a href="#/parties" data-tab="parties"><span class="tab-ico" aria-hidden="true">◆</span>パーティ</a>
+    <a href="#/chars" data-tab="chars"><span class="tab-ico" aria-hidden="true">●</span>キャラ</a>
     <a href="#/todo" data-tab="todo"><span class="tab-ico" aria-hidden="true">✓</span>やること</a>
     <a href="#/bank" data-tab="bank"><span class="tab-ico" aria-hidden="true">▣</span>バンク</a>
-    <a href="#/chars" data-tab="chars"><span class="tab-ico" aria-hidden="true">●</span>キャラ</a>
-    <a href="#/fruits" data-tab="fruits"><span class="tab-ico" aria-hidden="true">✿</span>実</a>
+    <a href="#/parties" data-tab="parties"><span class="tab-ico" aria-hidden="true">◆</span>パーティ</a>
     <a href="#/data" data-tab="data"><span class="tab-ico" aria-hidden="true">⇅</span>データ</a>
   </nav>
-
-  <!-- キャラ登録・編集 -->
-  <dialog id="charDialog" class="sheet">
-    <form method="dialog" id="charForm">
-      <h2 id="charDialogTitle">キャラを登録</h2>
-      <label class="field">
-        <span>キャラ名</span>
-        <input name="name" required maxlength="40" autocomplete="off" placeholder="例：ルシファー">
-      </label>
-      <label class="field">
-        <span>種族</span>
-        <input name="race" required maxlength="20" list="raceList" autocomplete="off" placeholder="候補から選ぶか入力">
-      </label>
-      <div class="field-row">
-        <label class="field">
-          <span>撃種</span>
-          <select name="hit" required></select>
-        </label>
-        <label class="field">
-          <span>戦型</span>
-          <select name="type" required></select>
-        </label>
-      </div>
-      <label class="field">
-        <span>メモ（任意）</span>
-        <textarea name="memo" rows="2" maxlength="300" placeholder="例：今ついている実、運極かどうか など"></textarea>
-      </label>
-      <label class="field">
-        <span>持っているアカウント（任意）</span>
-        <select name="account"></select>
-      </label>
-      <input type="hidden" name="id">
-      <div class="dialog-actions">
-        <button type="button" class="btn ghost" data-action="close-dialog">やめる</button>
-        <button type="submit" class="btn primary" value="save">保存</button>
-      </div>
-    </form>
-  </dialog>
-
-  <!-- 自分で追加する実 -->
-  <dialog id="fruitDialog" class="sheet">
-    <form method="dialog" id="fruitForm">
-      <h2 id="fruitDialogTitle">実を追加</h2>
-      <label class="field">
-        <span>実の名前</span>
-        <input name="name" required maxlength="30" autocomplete="off" placeholder="例：〇〇の力">
-      </label>
-      <label class="field">
-        <span>効く範囲</span>
-        <select name="scope" required></select>
-      </label>
-      <label class="field check">
-        <input type="checkbox" name="attack">
-        <span>攻撃力が上がる実（加撃系としてまとめて表示）</span>
-      </label>
-      <label class="field">
-        <span>効果メモ（任意）</span>
-        <input name="desc" maxlength="80" autocomplete="off">
-      </label>
-      <input type="hidden" name="id">
-      <div class="dialog-actions">
-        <button type="button" class="btn ghost" data-action="close-dialog">やめる</button>
-        <button type="submit" class="btn primary" value="save">保存</button>
-      </div>
-    </form>
-  </dialog>
 
   <!-- わくわくバンクの実 -->
   <dialog id="bankDialog" class="sheet">
