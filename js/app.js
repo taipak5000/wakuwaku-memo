@@ -1,638 +1,1357 @@
-// わくわく厳選メモ — 画面の表示と保存
-(() => {
-  'use strict';
+'use strict';
 
-  const D = window.WAKU_DATA;
-  const STORE_KEY = 'wakuwaku_memo_v1';
-  const THEME_KEY = 'wakuwaku_theme';
-  const app = document.getElementById('app');
+/* =========================================================
+   わくわく厳選メモ
+   データはブラウザの localStorage に保存し、JSON で書き出し・読み込みできる。
+   ========================================================= */
 
-  // ───────── 保存 ─────────
-  const emptyState = () => ({ version: 1, chars: [], parties: [], customFruits: [], bank: [] });
+const STORE_KEY = 'wakuwaku-memo:v1';
+const THEME_KEY = 'wakuwaku-memo:theme';
+const PARTY_SIZE = 4;
+const BOND_SCOPES = ['race', 'hit', 'type'];
 
-  function normalize(raw) {
-    const s = Object.assign(emptyState(), raw && typeof raw === 'object' ? raw : {});
-    ['chars', 'parties', 'customFruits', 'bank'].forEach((k) => { if (!Array.isArray(s[k])) s[k] = []; });
-    s.parties.forEach((p) => {
-      if (!Array.isArray(p.members)) p.members = [];
-      while (p.members.length < D.partySize) p.members.push({ charId: '', slots: [] });
-      p.members = p.members.slice(0, D.partySize).map((m) => ({
-        charId: (m && m.charId) || '',
-        slots: Array.isArray(m && m.slots) ? m.slots.slice(0, D.slotsPerChar).map((x) => ({
-          fruit: x.fruit || '', target: x.target || '', current: x.current || '', status: D.statuses.includes(x.status) ? x.status : '未着手'
-        })) : []
-      }));
-    });
-    s.bank = s.bank.filter((b) => b && b.fruit).map((b) => ({
-      id: b.id || uid(), fruit: String(b.fruit), grade: b.grade || D.grades[0],
-      count: Math.max(1, Math.min(99, parseInt(b.count, 10) || 1)), memo: b.memo || ''
+const $ = (sel, el = document) => el.querySelector(sel);
+const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+}[c]));
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+/* ---------- 状態 ---------- */
+
+function defaultState() {
+  return { version: 1, settings: { slotCount: 3 }, characters: [], customFruits: [], parties: [], bank: [] };
+}
+
+function emptyPlan() {
+  return { fruitId: '', target: '', current: '', status: 'todo' };
+}
+
+function newParty(name) {
+  return {
+    id: uid(),
+    name: name || '新しいパーティ',
+    quest: '',
+    memo: '',
+    members: Array.from({ length: PARTY_SIZE }, () => ({ charId: null, plans: [] })),
+    updatedAt: Date.now()
+  };
+}
+
+// 読み込んだデータの欠けを補い、壊れた値を取り除く
+function normalize(raw) {
+  const s = defaultState();
+  if (!raw || typeof raw !== 'object') return s;
+  const slotCount = Number(raw.settings?.slotCount);
+  s.settings.slotCount = slotCount === 4 ? 4 : 3;
+
+  s.characters = (Array.isArray(raw.characters) ? raw.characters : [])
+    .filter((c) => c && typeof c === 'object' && c.id)
+    .map((c) => ({
+      id: String(c.id),
+      name: String(c.name ?? '').slice(0, 40) || '名前なし',
+      race: String(c.race ?? '').slice(0, 20),
+      hit: DATA.hits.includes(c.hit) ? c.hit : DATA.hits[0],
+      type: DATA.types.includes(c.type) ? c.type : DATA.types[0],
+      memo: String(c.memo ?? '').slice(0, 300)
     }));
-    return s;
-  }
 
-  function load() {
-    try { return normalize(JSON.parse(localStorage.getItem(STORE_KEY))); }
-    catch (e) { return emptyState(); }
-  }
-  let state = load();
-  function save() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
-    catch (e) { toast('保存できませんでした（ブラウザの保存領域を確認してください）'); }
-  }
+  s.customFruits = (Array.isArray(raw.customFruits) ? raw.customFruits : [])
+    .filter((f) => f && typeof f === 'object' && f.id)
+    .map((f) => ({
+      id: String(f.id),
+      name: String(f.name ?? '').slice(0, 30) || '名前なしの実',
+      short: String(f.short ?? f.name ?? '').slice(0, 30) || '名前なしの実',
+      scope: DATA.scopes[f.scope] ? f.scope : 'self',
+      attack: !!f.attack,
+      desc: String(f.desc ?? '').slice(0, 80),
+      custom: true
+    }));
 
-  // ───────── 小物 ─────────
-  function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
-  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const rank = (g) => D.grades.indexOf(g); // 未設定は -1
-  const normType = (t) => String(t || '').replace(/^超/, '');
-  const charById = (id) => state.chars.find((c) => c.id === id);
-  const charName = (id) => (charById(id) || {}).name || '（未登録のキャラ）';
+  const charIds = new Set(s.characters.map((c) => c.id));
+  const statusIds = DATA.statuses.map((x) => x.id);
+  const gradeOk = (g) => (DATA.grades.includes(g) ? g : '');
 
-  // ───────── 実の一覧 ─────────
-  function builtinFruits() {
-    const list = [];
-    D.bonds.forEach((b) => D.bondKinds.forEach((k) => list.push({
-      name: `${b.prefix}・${k.suffix}`, scope: b.scope, attack: k.attack, desc: k.desc, group: b.prefix
-    })));
-    D.others.forEach((o) => list.push(Object.assign({ group: 'その他' }, o)));
-    return list;
-  }
-  function allFruits() {
-    return builtinFruits().concat(state.customFruits.map((f) => Object.assign({ group: '自分で追加', custom: true }, f)));
-  }
-  const fruitByName = (name) => allFruits().find((f) => f.name === name);
-
-  function fruitOptions(selected, withBlank) {
-    const groups = {};
-    allFruits().forEach((f) => { (groups[f.group] = groups[f.group] || []).push(f); });
-    let html = withBlank ? `<option value="">実を選ぶ</option>` : '';
-    Object.keys(groups).forEach((g) => {
-      html += `<optgroup label="${esc(g)}">` + groups[g].map((f) =>
-        `<option value="${esc(f.name)}"${f.name === selected ? ' selected' : ''}>${esc(f.name)}</option>`).join('') + '</optgroup>';
+  s.parties = (Array.isArray(raw.parties) ? raw.parties : [])
+    .filter((p) => p && typeof p === 'object' && p.id)
+    .map((p) => {
+      const party = newParty();
+      party.id = String(p.id);
+      party.name = String(p.name ?? '').slice(0, 40) || '名前なしのパーティ';
+      party.quest = String(p.quest ?? '').slice(0, 60);
+      party.memo = String(p.memo ?? '').slice(0, 1000);
+      party.updatedAt = Number(p.updatedAt) || Date.now();
+      const members = Array.isArray(p.members) ? p.members : [];
+      party.members = Array.from({ length: PARTY_SIZE }, (_, i) => {
+        const m = members[i] || {};
+        const plans = (Array.isArray(m.plans) ? m.plans : []).slice(0, 4).map((pl) => ({
+          fruitId: String(pl?.fruitId ?? ''),
+          target: gradeOk(pl?.target),
+          current: gradeOk(pl?.current),
+          status: statusIds.includes(pl?.status) ? pl.status : 'todo'
+        }));
+        return { charId: charIds.has(m.charId) ? m.charId : null, plans };
+      });
+      return party;
     });
-    if (selected && !fruitByName(selected)) html += `<option value="${esc(selected)}" selected>${esc(selected)}（一覧に無い実）</option>`;
-    return html;
+
+  // わくわくバンクに入れている実
+  s.bank = (Array.isArray(raw.bank) ? raw.bank : [])
+    .filter((b) => b && typeof b === 'object' && b.fruitId && gradeOk(b.grade))
+    .map((b) => ({
+      id: String(b.id || uid()),
+      fruitId: String(b.fruitId),
+      grade: b.grade,
+      count: Math.min(99, Math.max(1, Math.floor(Number(b.count)) || 1)),
+      memo: String(b.memo ?? '').slice(0, 60)
+    }));
+  return s;
+}
+
+function loadState() {
+  try {
+    const text = localStorage.getItem(STORE_KEY);
+    return text ? normalize(JSON.parse(text)) : defaultState();
+  } catch (e) {
+    return defaultState();
   }
-  const gradeOptions = (selected, blankLabel) =>
-    (blankLabel ? `<option value="">${esc(blankLabel)}</option>` : '') +
-    D.grades.map((g) => `<option${g === selected ? ' selected' : ''}>${esc(g)}</option>`).join('');
-  const statusOptions = (selected) => D.statuses.map((s) => `<option${s === selected ? ' selected' : ''}>${s}</option>`).join('');
+}
 
-  // ───────── 判定：パーティ内の実の重なり ─────────
-  const attrOf = (c, scope) => scope === 'race' ? c.race : scope === 'hit' ? c.hit : scope === 'type' ? normType(c.type) : null;
-  const scopeWord = { race: '種族', hit: '撃種', type: '戦型' };
+let state = loadState();
+let saveTimer = null;
 
-  function analyze(party) {
-    const notes = [];
-    const members = party.members.map((m, i) => ({ m, i, c: charById(m.charId) })).filter((x) => x.c);
-    const bondHolders = {}; // 実の名前 → [{c, attr}]
-    const partyOnly = {};
+function writeNow() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  } catch (e) {
+    toast('保存できませんでした。「データ」からファイルに書き出してください');
+  }
+}
 
-    members.forEach(({ m, c }) => {
-      const seen = {};
-      m.slots.forEach((s) => {
-        if (!s.fruit) return;
-        const f = fruitByName(s.fruit);
-        if (seen[s.fruit] && !(f && f.stackable)) {
-          notes.push({ level: 'danger', html: `<b>${esc(c.name)}</b> に <b>${esc(s.fruit)}</b> が2つあります。同じ実は同じキャラに重ねても効きません。` });
-        }
-        seen[s.fruit] = true;
-        if (!f) return;
-        if (f.scope === 'race' || f.scope === 'hit' || f.scope === 'type') {
-          const a = attrOf(c, f.scope);
-          const reach = members.filter((x) => attrOf(x.c, f.scope) === a);
-          (bondHolders[s.fruit] = bondHolders[s.fruit] || []).push({ c, attr: a });
-          const names = reach.map((x) => esc(x.c.name)).join('・');
-          notes.push({
-            level: reach.length <= 1 ? 'warn' : 'info',
-            html: `<b>${esc(c.name)}</b> の ${esc(s.fruit)} → ${scopeWord[f.scope]}「${esc(a)}」の <b>${reach.length}体</b>に届く（${names}）` +
-              (reach.length <= 1 ? '。同じ' + scopeWord[f.scope] + 'の仲間がいないので、自分にしか効きません。' : '')
-          });
-        }
-        if (f.scope === 'party') (partyOnly[s.fruit] = partyOnly[s.fruit] || []).push(c);
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(writeNow, 150);
+}
+
+// 画面を閉じる・アプリを切り替える直前に、保存待ちの分を書き込む
+window.addEventListener('pagehide', () => { if (saveTimer) writeNow(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && saveTimer) writeNow();
+});
+
+/* ---------- 参照ヘルパー ---------- */
+
+const allFruits = () => DATA.fruits.concat(state.customFruits);
+const fruitById = (id) => allFruits().find((f) => f.id === id) || null;
+const charById = (id) => (id ? state.characters.find((c) => c.id === id) || null : null);
+const partyById = (id) => state.parties.find((p) => p.id === id) || null;
+const normType = (t) => String(t || '').replace(/^超/, '');
+const gradeRank = (g) => {
+  const i = DATA.grades.indexOf(g);
+  return i < 0 ? 999 : i;
+};
+const statusLabel = (id) => DATA.statuses.find((s) => s.id === id)?.label || id;
+
+function attrOf(c, scope) {
+  if (!c) return '';
+  if (scope === 'race') return c.race;
+  if (scope === 'hit') return c.hit;
+  if (scope === 'type') return normType(c.type);
+  return '';
+}
+
+function plansOf(member) {
+  const n = state.settings.slotCount;
+  while (member.plans.length < n) member.plans.push(emptyPlan());
+  return member.plans.slice(0, n);
+}
+
+function touch(party) {
+  party.updatedAt = Date.now();
+  save();
+}
+
+/* ---------- 相性の判定 ---------- */
+
+function analyze(party) {
+  const chars = party.members.map((m) => charById(m.charId));
+  const groups = { race: {}, hit: {}, type: {} };
+  chars.forEach((c, i) => {
+    if (!c) return;
+    for (const s of BOND_SCOPES) {
+      const v = attrOf(c, s);
+      if (!v) continue;
+      (groups[s][v] ||= []).push(i);
+    }
+  });
+
+  const reach = (i, scope) => {
+    const c = chars[i];
+    if (!c) return 0;
+    return (groups[scope][attrOf(c, scope)] || []).length;
+  };
+
+  const notes = {};
+  const addNote = (i, k, level, text) => {
+    (notes[`${i}-${k}`] ||= []).push({ level, text });
+  };
+  const who = (it, self) => (it.i === self.i ? 'このキャラの別の枠' : (it.c?.name || `${it.i + 1}体目`));
+
+  const items = [];
+  party.members.forEach((m, i) => {
+    plansOf(m).forEach((p, k) => {
+      const f = p.fruitId ? fruitById(p.fruitId) : null;
+      if (f) items.push({ i, k, p, f, c: chars[i] });
+    });
+  });
+
+  // 絆系：同じ名前の実を、同じ種族/撃種/戦型どうしで持つと重ならない
+  const bondMap = {};
+  for (const it of items) {
+    if (!BOND_SCOPES.includes(it.f.scope) || !it.c) continue;
+    const key = `${it.f.id}|${attrOf(it.c, it.f.scope)}`;
+    (bondMap[key] ||= []).push(it);
+  }
+  for (const list of Object.values(bondMap)) {
+    if (list.length < 2) continue;
+    for (const it of list) {
+      const others = list.filter((o) => o !== it).map((o) => who(o, it)).join('、');
+      addNote(it.i, it.k, 'warn',
+        `${others}も「${it.f.short}」。${attrOf(it.c, it.f.scope)}どうしでは重ならず、等級の高い1つ分しか効きません`);
+    }
+  }
+
+  // クエスト全体の実：パーティ内で重ならない
+  const questMap = {};
+  for (const it of items) {
+    if (it.f.scope === 'quest') (questMap[it.f.id] ||= []).push(it);
+  }
+  for (const list of Object.values(questMap)) {
+    if (list.length < 2) continue;
+    for (const it of list) {
+      const others = list.filter((o) => o !== it).map((o) => who(o, it)).join('、');
+      addNote(it.i, it.k, 'warn', `${others}も「${it.f.short}」。クエスト全体の実は重ならず、1つ分しか効きません`);
+    }
+  }
+
+  // 自分のみの実：同じキャラに同じ実を2つつけても1つ分（一撃失心だけは例外）
+  const selfMap = {};
+  for (const it of items) {
+    if (it.f.scope !== 'self' || it.f.id === 'shisshin') continue;
+    (selfMap[`${it.i}|${it.f.id}`] ||= []).push(it);
+  }
+  for (const list of Object.values(selfMap)) {
+    if (list.length < 2) continue;
+    for (const it of list) addNote(it.i, it.k, 'warn', `同じキャラに「${it.f.short}」が2つ。効くのは等級の高い1つだけです`);
+  }
+
+  // 絆系が自分にしか届かない場合の補足
+  const memberCount = chars.filter(Boolean).length;
+  for (const it of items) {
+    if (!BOND_SCOPES.includes(it.f.scope) || !it.c) continue;
+    if (memberCount >= 2 && reach(it.i, it.f.scope) === 1) {
+      addNote(it.i, it.k, 'info', `この編成では${DATA.scopes[it.f.scope]}が他にいないので、自分にだけ効きます`);
+    }
+  }
+
+  return { chars, groups, reach, notes, items, memberCount };
+}
+
+// 編成全体のヒント
+function partyHints(party, a) {
+  const hints = [];
+  if (a.memberCount === 0) return hints;
+
+  for (const scope of BOND_SCOPES) {
+    const entries = Object.entries(a.groups[scope]).filter(([, idx]) => idx.length >= 2)
+      .sort((x, y) => y[1].length - x[1].length);
+    for (const [value, idx] of entries) {
+      const attackers = a.items.filter((it) => it.f.scope === scope && it.f.attack && idx.includes(it.i));
+      const label = `${value} ${idx.length}体`;
+      if (attackers.length === 0) {
+        hints.push({
+          level: 'tip',
+          text: `${label}：${DATA.scopes[scope]}の加撃系がまだありません。誰か1体につけると${idx.length}体の攻撃力が上がります`
+        });
+      } else {
+        const names = attackers.map((it) => `${it.c.name}（${it.f.short}）`).join('、');
+        const dup = new Set(attackers.map((it) => it.f.id)).size < attackers.length;
+        hints.push(dup
+          ? { level: 'tip', text: `${label}：${names}。同じ名前の実が重なっているので、片方を別の加撃系に変えると無駄がありません` }
+          : { level: 'ok', text: `${label}：${names}` });
+      }
+    }
+  }
+
+  const sharedAny = BOND_SCOPES.some((s) => Object.values(a.groups[s]).some((idx) => idx.length >= 2));
+  if (a.memberCount >= 2 && !sharedAny) {
+    hints.push({
+      level: 'tip',
+      text: '種族・撃種・戦型がそろっていないため、絆系の実はそれぞれ自分にだけ効きます。単体で伸ばすなら上昇値の大きい同族系が向いています'
+    });
+  }
+  return hints;
+}
+
+/* ---------- わくわくバンク：移せば厳選完了になるものを探す ---------- */
+
+// 実はキャラにつくので、同じキャラ×同じ実は複数のパーティにまたがっていても1つの狙いにまとめる。
+// gradeRank は高い等級ほど小さい（未設定は 999）。
+function collectTargets() {
+  const map = new Map();
+  for (const party of state.parties) {
+    party.members.forEach((m, i) => {
+      const c = charById(m.charId);
+      if (!c) return;
+      plansOf(m).forEach((p, k) => {
+        if (!p.fruitId || !fruitById(p.fruitId)) return;
+        const key = `${c.id}|${p.fruitId}`;
+        if (!map.has(key)) map.set(key, { key, c, fruitId: p.fruitId, target: 999, current: 999, refs: [], parties: [] });
+        const t = map.get(key);
+        if (p.target) t.target = Math.min(t.target, gradeRank(p.target));
+        if (p.current) t.current = Math.min(t.current, gradeRank(p.current));
+        if (p.status === 'done') return;
+        t.refs.push({ party, i, k });
+        if (!t.parties.includes(party)) t.parties.push(party);
       });
     });
-
-    Object.keys(bondHolders).forEach((name) => {
-      const byAttr = {};
-      bondHolders[name].forEach((h) => { (byAttr[h.attr] = byAttr[h.attr] || []).push(h.c); });
-      Object.keys(byAttr).forEach((a) => {
-        if (byAttr[a].length > 1) notes.push({ level: 'danger', html: `${esc(name)} が ${byAttr[a].map((c) => '<b>' + esc(c.name) + '</b>').join('・')} で重なっています。同じ名前の絆の実は1つ分しか効きません。` });
-      });
-    });
-    Object.keys(partyOnly).forEach((name) => {
-      if (partyOnly[name].length > 1) notes.push({ level: 'danger', html: `${esc(name)} が ${partyOnly[name].length}体についています。パーティ内で重ならないので、1体分しか効きません。` });
-    });
-    return notes;
   }
+  return [...map.values()].filter((t) => t.refs.length && !(t.target < 999 && t.current <= t.target));
+}
 
-  // ───────── 判定：わくわくバンクから移せば完了になるもの ─────────
-  // 実はキャラについているので、同じキャラ×同じ実は複数パーティにまたがっていても1つの「狙い」にまとめる。
-  function collectTargets() {
-    const map = new Map();
-    state.parties.forEach((p) => p.members.forEach((m, mi) => {
-      if (!m.charId || !charById(m.charId)) return;
-      m.slots.forEach((s, si) => {
-        if (!s.fruit) return;
-        const key = m.charId + '|' + s.fruit;
-        let t = map.get(key);
-        if (!t) { t = { key, charId: m.charId, fruit: s.fruit, target: -1, current: -1, parties: [], refs: [], allDone: true }; map.set(key, t); }
-        t.target = Math.max(t.target, rank(s.target));
-        t.current = Math.max(t.current, rank(s.current));
-        if (!t.parties.includes(p.name)) t.parties.push(p.name);
-        t.refs.push({ p, mi, si });
-        if (s.status !== '完了') t.allDone = false;
-      });
-    }));
-    return [...map.values()].map((t) => Object.assign(t, {
-      done: t.allDone || (t.target >= 0 && t.current >= t.target),
-      noTarget: t.target < 0
-    }));
+function bankMatches() {
+  const targets = collectTargets();
+  const complete = [];
+  const upgrade = [];
+  const done = new Set();
+  for (const entry of state.bank) {
+    const r = gradeRank(entry.grade);
+    const same = targets.filter((t) => t.fruitId === entry.fruitId && t.target < 999);
+    const ok = same.filter((t) => r <= t.target);
+    if (ok.length) {
+      complete.push({ entry, targets: ok });
+      ok.forEach((t) => done.add(t.key));
+    }
   }
-
-  function bankMatches() {
-    const targets = collectTargets().filter((t) => !t.done);
-    const complete = []; // { entry, targets: [...] }
-    const upgrade = [];
-    state.bank.forEach((entry) => {
-      const r = rank(entry.grade);
-      const same = targets.filter((t) => t.fruit === entry.fruit);
-      const ok = same.filter((t) => !t.noTarget && r >= t.target);
-      const up = same.filter((t) => !t.noTarget && r < t.target && r > t.current);
-      if (ok.length) complete.push({ entry, targets: ok });
-      if (up.length) upgrade.push({ entry, targets: up });
-    });
-    const noTarget = targets.filter((t) => t.noTarget && state.bank.some((b) => b.fruit === t.fruit));
-    return { complete, upgrade, noTarget };
+  for (const entry of state.bank) {
+    const r = gradeRank(entry.grade);
+    const up = targets.filter((t) => t.fruitId === entry.fruitId && t.target < 999
+      && r > t.target && r < t.current && !done.has(t.key));
+    if (up.length) upgrade.push({ entry, targets: up });
   }
+  const noTarget = targets.filter((t) => t.target === 999 && state.bank.some((b) => b.fruitId === t.fruitId));
+  return { complete, upgrade, noTarget, completeCount: done.size };
+}
 
-  function moveFromBank(entryId, key) {
-    const entry = state.bank.find((b) => b.id === entryId);
-    const t = collectTargets().find((x) => x.key === key);
-    if (!entry || !t) return;
-    const before = JSON.stringify(state);
-    const r = rank(entry.grade);
-    t.refs.forEach(({ p, mi, si }) => {
-      const s = p.members[mi].slots[si];
-      s.current = entry.grade;
-      s.status = (rank(s.target) >= 0 && r >= rank(s.target)) ? '完了' : '厳選中';
-    });
-    entry.count -= 1;
-    if (entry.count <= 0) state.bank = state.bank.filter((b) => b !== entry);
+// バンクの実が、目標に届く等級で入っているか
+const bankCovers = (fruitId, target) =>
+  !!target && state.bank.some((b) => b.fruitId === fruitId && gradeRank(b.grade) <= gradeRank(target));
+
+function moveFromBank(entryId, key) {
+  const entry = state.bank.find((b) => b.id === entryId);
+  const t = collectTargets().find((x) => x.key === key);
+  if (!entry || !t) return;
+  const before = JSON.stringify(state);
+  for (const { party, i, k } of t.refs) setPlan(party, i, k, 'current', entry.grade);
+  entry.count -= 1;
+  if (entry.count <= 0) state.bank = state.bank.filter((b) => b !== entry);
+  save();
+  render();
+  const f = fruitById(entry.fruitId);
+  toast(`${t.c.name}に${f ? f.short : '実'}（${entry.grade}）を移しました`, () => {
+    state = normalize(JSON.parse(before));
     save();
     render();
-    toast(`${charName(t.charId)} に ${entry.fruit}（${entry.grade}）を移しました`, () => {
-      state = normalize(JSON.parse(before)); save(); render();
-    });
-  }
+  });
+}
 
-  // ───────── 画面 ─────────
-  function route() {
-    const h = location.hash.replace(/^#\/?/, '');
-    const [name, id] = h.split('/');
-    return { name: name || 'parties', id };
-  }
+/* ---------- 表示部品 ---------- */
 
-  function render() {
-    const r = route();
-    const y = window.scrollY;
-    const views = { parties: viewParties, party: viewParty, todo: viewTodo, bank: viewBank, chars: viewChars, fruits: viewFruits, data: viewData };
-    app.innerHTML = (views[r.name] || viewParties)(r.id);
-    const tab = r.name === 'party' ? 'parties' : r.name;
-    document.querySelectorAll('.tabbar a').forEach((a) => {
-      const on = a.dataset.tab === tab;
-      a.classList.toggle('active', on);
-      if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
-    });
-    if (render.lastRoute === location.hash) window.scrollTo(0, y); else window.scrollTo(0, 0);
-    render.lastRoute = location.hash;
-  }
+function chips(c) {
+  if (!c) return '';
+  const hitCls = c.hit === '反射' ? 'chip-hit-ref' : 'chip-hit-pen';
+  return `<span class="chip chip-race">${esc(c.race || '種族未設定')}</span>`
+    + `<span class="chip ${hitCls}">${esc(c.hit)}</span>`
+    + `<span class="chip chip-type">${esc(c.type)}</span>`;
+}
 
-  function partyProgress(p) {
-    let total = 0, done = 0;
-    p.members.forEach((m) => m.slots.forEach((s) => { if (s.fruit) { total++; if (s.status === '完了') done++; } }));
-    return { total, done };
-  }
+function options(list, selected, placeholder) {
+  const head = placeholder !== undefined ? `<option value="">${esc(placeholder)}</option>` : '';
+  return head + list.map((o) => {
+    const value = typeof o === 'string' ? o : o.value;
+    const label = typeof o === 'string' ? o : o.label;
+    return `<option value="${esc(value)}"${value === selected ? ' selected' : ''}>${esc(label)}</option>`;
+  }).join('');
+}
 
-  function viewParties() {
-    const cards = state.parties.map((p) => {
-      const { total, done } = partyProgress(p);
-      const names = p.members.filter((m) => m.charId).map((m) => esc(charName(m.charId)));
-      const warns = analyze(p).filter((n) => n.level === 'danger').length;
-      return `<a class="card tap" href="#/party/${esc(p.id)}">
-        <div class="card-head"><h3 class="card-title">${esc(p.name)}</h3>
-          <div class="chips">${warns ? `<span class="chip danger">重なり ${warns}</span>` : ''}<span class="chip ${total && done === total ? 'ok' : 'accent'}">${done}/${total}</span></div></div>
-        <div class="card-sub">${names.length ? names.join('・') : 'キャラ未設定'}</div>
-        <div class="progress"><i style="width:${total ? Math.round(done / total * 100) : 0}%"></i></div>
+function fruitOptions(selected, placeholder = '— 狙う実を選ぶ —') {
+  const groupsDef = [
+    ['同族の絆', (f) => f.scope === 'race' && !f.custom],
+    ['撃種の絆', (f) => f.scope === 'hit' && !f.custom],
+    ['戦型の絆', (f) => f.scope === 'type' && !f.custom],
+    ['自分のみに効く実', (f) => f.scope === 'self' && !f.custom],
+    ['クエスト全体に効く実', (f) => f.scope === 'quest' && !f.custom],
+    ['自分で追加した実', (f) => f.custom]
+  ];
+  const fruits = allFruits();
+  let html = `<option value="">${esc(placeholder)}</option>`;
+  for (const [label, test] of groupsDef) {
+    const list = fruits.filter(test);
+    if (!list.length) continue;
+    html += `<optgroup label="${esc(label)}">`
+      + list.map((f) => `<option value="${esc(f.id)}"${f.id === selected ? ' selected' : ''}>${esc(f.short)}</option>`).join('')
+      + '</optgroup>';
+  }
+  return html;
+}
+
+function progressOf(party) {
+  let total = 0;
+  let done = 0;
+  let doing = 0;
+  for (const m of party.members) {
+    for (const p of plansOf(m)) {
+      if (!p.fruitId) continue;
+      total++;
+      if (p.status === 'done') done++;
+      if (p.status === 'doing') doing++;
+    }
+  }
+  return { total, done, doing };
+}
+
+function emptyBox(text, actionHtml = '') {
+  return `<div class="empty"><p>${text}</p>${actionHtml}</div>`;
+}
+
+/* ---------- 画面：パーティ一覧 ---------- */
+
+function viewParties() {
+  const list = [...state.parties].sort((a, b) => b.updatedAt - a.updatedAt);
+  const cards = list.map((p) => {
+    const pr = progressOf(p);
+    const names = p.members.map((m) => charById(m.charId)?.name).filter(Boolean);
+    const pct = pr.total ? Math.round((pr.done / pr.total) * 100) : 0;
+    return `
+      <a class="card party-card" href="#/party/${esc(p.id)}">
+        <div class="party-card-head">
+          <h3>${esc(p.name)}</h3>
+          ${p.quest ? `<span class="quest">${esc(p.quest)}</span>` : ''}
+        </div>
+        <p class="party-members">${names.length ? names.map(esc).join(' / ') : 'まだキャラがいません'}</p>
+        <div class="progress" aria-label="完了 ${pr.done} / ${pr.total}">
+          <div class="progress-bar" style="width:${pct}%"></div>
+        </div>
+        <p class="party-meta">完了 ${pr.done} / ${pr.total}${pr.doing ? `・厳選中 ${pr.doing}` : ''}</p>
       </a>`;
-    }).join('');
-    return `<div class="page-head"><h2 class="page-title">パーティ</h2>
-        <button class="btn primary" data-action="add-party">＋ パーティ</button></div>
-      ${state.chars.length ? '' : `<div class="card"><p class="card-sub" style="margin:0 0 10px">まずは「キャラ」でパーティに入れるキャラを登録してください。</p><a class="btn small" href="#/chars">キャラを登録する</a></div>`}
-      ${cards || '<p class="empty">パーティはまだありません。<br>クエストごとに4体の組み合わせを作り、狙う実をメモできます。</p>'}`;
-  }
+  }).join('');
 
-  function viewParty(id) {
-    const p = state.parties.find((x) => x.id === id);
-    if (!p) return `<a class="back" href="#/parties">‹ パーティ</a><p class="empty">このパーティは見つかりません。</p>`;
-    const notes = analyze(p);
-    const charOpts = (sel) => `<option value="">キャラを選ぶ</option>` + state.chars.map((c) =>
-      `<option value="${esc(c.id)}"${c.id === sel ? ' selected' : ''}>${esc(c.name)}（${esc(c.race)}・${esc(c.hit)}・${esc(c.type)}）</option>`).join('');
-    const members = p.members.map((m, mi) => {
-      const slots = m.slots.map((s, si) => {
-        const at = `data-p="${esc(p.id)}" data-m="${mi}" data-s="${si}"`;
-        const done = s.status === '完了';
-        return `<div class="slot${done ? ' done' : ''}">
-          <div class="slot-fruit"><select ${at} data-k="fruit" aria-label="狙う実">${fruitOptions(s.fruit, true)}</select>
-            <button class="icon-btn danger" data-action="del-slot" ${at} aria-label="この実を外す">✕</button></div>
-          <label><span class="slot-label">目標</span><select ${at} data-k="target">${gradeOptions(s.target, '—')}</select></label>
-          <label><span class="slot-label">今</span><select ${at} data-k="current">${gradeOptions(s.current, 'なし')}</select></label>
-          <label class="slot-status" style="grid-column: span 2"><span class="slot-label">状態</span><select ${at} data-k="status">${statusOptions(s.status)}</select></label>
+  return `
+    <section>
+      <div class="section-head">
+        <h2>パーティ</h2>
+        <button class="btn primary" data-action="new-party">＋ パーティを作る</button>
+      </div>
+      ${list.length ? `<div class="stack">${cards}</div>` : emptyBox(
+        'クエストごとにパーティを作り、4体それぞれに狙う実をメモしていきます。',
+        '<button class="btn primary" data-action="new-party">最初のパーティを作る</button>'
+      )}
+    </section>`;
+}
+
+/* ---------- 画面：パーティ詳細 ---------- */
+
+function viewParty(id) {
+  const party = partyById(id);
+  if (!party) {
+    return emptyBox('このパーティは見つかりませんでした。', '<a class="btn" href="#/parties">パーティ一覧へ</a>');
+  }
+  const a = analyze(party);
+  const hints = partyHints(party, a);
+
+  const groupRow = (scope, label) => {
+    const entries = Object.entries(a.groups[scope]).sort((x, y) => y[1].length - x[1].length);
+    if (!entries.length) return '';
+    return `<div class="synergy-row"><span class="synergy-label">${label}</span><div class="synergy-chips">`
+      + entries.map(([v, idx]) => `<span class="count-chip${idx.length >= 2 ? ' shared' : ''}">${esc(v)}<b>×${idx.length}</b></span>`).join('')
+      + '</div></div>';
+  };
+
+  const synergy = a.memberCount ? `
+      <div class="synergy">
+        ${groupRow('race', '種族')}
+        ${groupRow('hit', '撃種')}
+        ${groupRow('type', '戦型')}
+      </div>
+      ${hints.length ? `<ul class="hints">${hints.map((h) => `<li class="hint-${h.level}">${esc(h.text)}</li>`).join('')}</ul>` : ''}`
+    : '<p class="muted">下の枠にキャラを入れると、種族・撃種・戦型の重なりがここに出ます。</p>';
+
+  const charOptions = [...state.characters].sort((x, y) => x.name.localeCompare(y.name, 'ja'))
+    .map((c) => ({ value: c.id, label: `${c.name}（${c.race}/${c.hit}/${normType(c.type)}）` }));
+
+  const slots = party.members.map((m, i) => {
+    const c = a.chars[i];
+    const plans = plansOf(m);
+    const reachRow = c ? `
+      <div class="reach">
+        <span>絆の実が届く人数</span>
+        <span class="reach-item">同族<b>${a.reach(i, 'race')}</b></span>
+        <span class="reach-item">撃種<b>${a.reach(i, 'hit')}</b></span>
+        <span class="reach-item">戦型<b>${a.reach(i, 'type')}</b></span>
+      </div>` : '';
+
+    const rows = plans.map((p, k) => {
+      const f = p.fruitId ? fruitById(p.fruitId) : null;
+      let badge = '';
+      if (f && BOND_SCOPES.includes(f.scope)) {
+        badge = c ? `<span class="badge bond">${DATA.scopes[f.scope]} ×${a.reach(i, f.scope)}体</span>` : '';
+      } else if (f && f.scope === 'quest') {
+        badge = '<span class="badge quest">クエスト全体</span>';
+      } else if (f) {
+        badge = '<span class="badge self">自分のみ</span>';
+      }
+      const notes = (a.notes[`${i}-${k}`] || [])
+        .map((n) => `<p class="note note-${n.level}">${esc(n.text)}</p>`).join('');
+      const fk = `plan-${i}-${k}`;
+      return `
+        <div class="plan status-${esc(p.status)}${f ? '' : ' is-empty'}">
+          <div class="plan-top">
+            <span class="plan-no">${k + 1}</span>
+            <select class="plan-fruit" data-plan="fruitId" data-slot="${i}" data-k="${k}" data-fk="${fk}-fruit" aria-label="${i + 1}体目 ${k + 1}つ目の実">${fruitOptions(p.fruitId)}</select>
+            ${badge}
+          </div>
+          ${f ? `
+          <div class="plan-grid">
+            <label><span>目標</span><select data-plan="target" data-slot="${i}" data-k="${k}" data-fk="${fk}-target">${options(DATA.grades, p.target, '未設定')}</select></label>
+            <label><span>今</span><select data-plan="current" data-slot="${i}" data-k="${k}" data-fk="${fk}-current">${options(DATA.grades, p.current, 'なし')}</select></label>
+            <label><span>状態</span><select data-plan="status" data-slot="${i}" data-k="${k}" data-fk="${fk}-status">${options(DATA.statuses.map((s) => ({ value: s.id, label: s.label })), p.status)}</select></label>
+          </div>` : ''}
+          ${notes}
         </div>`;
-      }).join('');
-      return `<div class="card member">
-        <div class="member-head"><span class="member-no">${mi + 1}</span>
-          <select data-action="set-member" data-p="${esc(p.id)}" data-m="${mi}" aria-label="${mi + 1}体目のキャラ">${charOpts(m.charId)}</select></div>
-        ${slots}
-        ${m.slots.length < D.slotsPerChar ? `<button class="btn small add-slot" data-action="add-slot" data-p="${esc(p.id)}" data-m="${mi}">＋ 狙う実を追加</button>` : ''}
-      </div>`;
     }).join('');
-    return `<a class="back" href="#/parties">‹ パーティ</a>
-      <div class="page-head" style="flex-wrap:nowrap"><input class="inline-input" data-action="rename-party" data-p="${esc(p.id)}" value="${esc(p.name)}" maxlength="40" aria-label="パーティ名">
-        <button class="icon-btn danger" data-action="del-party" data-p="${esc(p.id)}" aria-label="パーティを削除">🗑</button></div>
-      ${notes.length ? `<div class="card"><ul class="notes">${notes.map((n) => `<li class="note ${n.level}">${n.html}</li>`).join('')}</ul></div>` : ''}
-      ${state.chars.length ? '' : '<p class="lead">キャラが未登録です。「キャラ」タブで先に登録してください。</p>'}
-      ${members}`;
-  }
 
-  function viewTodo() {
-    const targets = collectTargets().filter((t) => !t.done);
-    const inBank = (t) => state.bank.some((b) => b.fruit === t.fruit && rank(b.grade) >= t.target && t.target >= 0);
-    const byChar = {};
-    targets.forEach((t) => { (byChar[t.charId] = byChar[t.charId] || []).push(t); });
-    const cards = Object.keys(byChar).map((cid) => {
-      const c = charById(cid);
-      const rows = byChar[cid].map((t) => `<div class="list-row" style="padding:10px 0">
-          <div class="grow"><div class="name">${esc(t.fruit)}</div>
-          <div class="meta">今 ${t.current >= 0 ? esc(D.grades[t.current]) : 'なし'} → 目標 ${t.target >= 0 ? esc(D.grades[t.target]) : '未設定'}・${t.parties.map(esc).join('、')}</div></div>
-          ${inBank(t) ? '<a class="chip ok" href="#/bank">バンクにあり</a>' : ''}
-        </div>`).join('');
-      return `<div class="card"><div class="card-head"><h3 class="card-title">${esc(c.name)}</h3><span class="chip accent">${byChar[cid].length}件</span></div>
-        <div class="card-sub">${esc(c.race)}・${esc(c.hit)}・${esc(c.type)}</div>${rows}</div>`;
-    }).join('');
-    return `<div class="page-head"><h2 class="page-title">やること</h2></div>
-      <p class="lead">英雄の神殿でリーダーにするキャラごとに、まだ終わっていない実をまとめています。</p>
-      ${cards || '<p class="empty">終わっていない実はありません。</p>'}`;
-  }
+    return `
+      <article class="card slot">
+        <div class="slot-head">
+          <span class="slot-no">${i + 1}</span>
+          <select class="slot-char" data-slot-char="${i}" data-fk="slot-${i}" aria-label="${i + 1}体目のキャラ">
+            ${options(charOptions, m.charId || '', '— キャラを選ぶ —')}
+            <option value="__new">＋ 新しいキャラを登録</option>
+          </select>
+          ${c ? `<button class="icon-btn" data-action="edit-char" data-id="${esc(c.id)}" aria-label="${esc(c.name)}を編集">✎</button>` : ''}
+        </div>
+        ${c ? `<div class="chips">${chips(c)}</div>${c.memo ? `<p class="char-memo">${esc(c.memo)}</p>` : ''}` : ''}
+        ${reachRow}
+        ${c ? `<div class="plans">${rows}</div>` : ''}
+      </article>`;
+  }).join('');
 
-  function viewBank() {
-    const { complete, upgrade, noTarget } = bankMatches();
-    const total = state.bank.reduce((a, b) => a + b.count, 0);
-    const completeKeys = new Set(complete.flatMap((x) => x.targets.map((t) => t.key)));
-
-    const targetRow = (entry, t, isComplete) => {
-      const c = charById(t.charId);
-      return `<div class="hit-target"><div class="grow">
-          <div class="name">${esc(c.name)}</div>
-          <div class="meta">今 ${t.current >= 0 ? esc(D.grades[t.current]) : 'なし'} → 目標 ${esc(D.grades[t.target])}・${t.parties.map(esc).join('、')}</div></div>
-          <button class="btn small ${isComplete ? 'ok' : ''}" data-action="move" data-b="${esc(entry.id)}" data-key="${esc(t.key)}">移した</button>
-        </div>`;
-    };
-    const entryCard = ({ entry, targets }, isComplete) => `<div class="card hit-card${isComplete ? ' complete' : ''}">
-        <div class="hit-main"><span class="name" style="font-weight:800">${esc(entry.fruit)}</span>
-          <span class="chip accent">${esc(entry.grade)}</span><span class="chip">×${entry.count}</span>
-          ${targets.length > entry.count ? `<span class="chip warn">候補${targets.length}体に対して${entry.count}個</span>` : ''}</div>
-        ${targets.map((t) => targetRow(entry, t, isComplete)).join('')}
-      </div>`;
-
-    const upgradeOnly = upgrade.map((x) => ({ entry: x.entry, targets: x.targets.filter((t) => !completeKeys.has(t.key)) })).filter((x) => x.targets.length);
-
-    const list = state.bank.map((b) => `<div class="list-row">
-        <div class="grow"><div class="name">${esc(b.fruit)}</div>
-          <div class="meta">${esc(b.grade)}・${b.count}個${b.memo ? '・' + esc(b.memo) : ''}</div></div>
-        <button class="icon-btn" data-action="edit-bank" data-b="${esc(b.id)}" aria-label="編集">✎</button>
-        <button class="icon-btn danger" data-action="del-bank" data-b="${esc(b.id)}" aria-label="削除">✕</button>
-      </div>`).join('');
-
-    return `<div class="page-head"><h2 class="page-title">わくわくバンク</h2>
-        <button class="btn primary" data-action="add-bank">＋ 実を登録</button></div>
-      <p class="lead">バンクに入れている実を登録すると、パーティの狙いと照らし合わせて「移せば厳選が終わるキャラ」を探します。</p>
-      <div class="stat-row">
-        <div class="stat"><div class="label">バンクの実</div><div class="big-num">${total}</div></div>
-        <div class="stat"><div class="label">移せば完了</div><div class="big-num" style="color:var(--ok)">${completeKeys.size}</div></div>
-        <div class="stat"><div class="label">等級アップ</div><div class="big-num">${upgradeOnly.reduce((a, x) => a + x.targets.length, 0)}</div></div>
+  const pr = progressOf(party);
+  return `
+    <section>
+      <a class="back" href="#/parties">‹ パーティ一覧</a>
+      <div class="card party-info">
+        <label class="field">
+          <span>パーティ名</span>
+          <input data-party-field="name" value="${esc(party.name)}" maxlength="40" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>使うクエスト（任意）</span>
+          <input data-party-field="quest" value="${esc(party.quest)}" maxlength="60" autocomplete="off" placeholder="例：禁忌の獄 深淵">
+        </label>
+        <p class="party-meta">完了 ${pr.done} / ${pr.total}${pr.doing ? `・厳選中 ${pr.doing}` : ''}</p>
       </div>
 
-      <h3 class="section-title">移せば厳選完了</h3>
-      ${complete.length ? complete.map((x) => entryCard(x, true)).join('') : `<p class="empty">${state.bank.length ? '今のバンクの中に、移せば目標に届く実はありません。' : 'バンクの実を登録すると、ここに候補が出ます。'}</p>`}
-
-      ${upgradeOnly.length ? `<h3 class="section-title">目標には届かないが、今より等級が上がる</h3>${upgradeOnly.map((x) => entryCard(x, false)).join('')}` : ''}
-
-      ${noTarget.length ? `<p class="lead" style="margin-top:12px">目標の等級が未設定のため判定できない枠：${noTarget.map((t) => esc(charName(t.charId)) + 'の' + esc(t.fruit)).join('、')}</p>` : ''}
-
-      <h3 class="section-title">バンクに入っている実</h3>
-      ${list ? `<div class="list">${list}</div>` : '<p class="empty">まだ登録されていません。</p>'}`;
-  }
-
-  function viewChars() {
-    const rows = state.chars.map((c) => {
-      const used = state.parties.filter((p) => p.members.some((m) => m.charId === c.id)).length;
-      return `<div class="list-row"><div class="grow">
-          <div class="name">${esc(c.name)}</div>
-          <div class="meta">${esc(c.race)}・${esc(c.hit)}・${esc(c.type)}${used ? `・${used}パーティ` : ''}${c.memo ? '<br>' + esc(c.memo) : ''}</div></div>
-        <button class="icon-btn" data-action="edit-char" data-c="${esc(c.id)}" aria-label="編集">✎</button>
-        <button class="icon-btn danger" data-action="del-char" data-c="${esc(c.id)}" aria-label="削除">✕</button></div>`;
-    }).join('');
-    return `<div class="page-head"><h2 class="page-title">キャラ</h2>
-        <button class="btn primary" data-action="add-char">＋ キャラ</button></div>
-      ${rows ? `<div class="list">${rows}</div>` : '<p class="empty">キャラはまだ登録されていません。<br>一度登録すれば、どのパーティでも使い回せます。</p>'}`;
-  }
-
-  function viewFruits() {
-    const groups = {};
-    builtinFruits().forEach((f) => { (groups[f.group] = groups[f.group] || []).push(f); });
-    const scopeShort = { self: '自身', race: '同族', hit: '撃種', type: '戦型', party: 'パーティで1つ' };
-    const row = (f, custom) => `<div class="list-row"><div class="grow">
-        <div class="name">${esc(f.name)}</div>
-        <div class="meta">${esc(f.desc || '')}</div></div>
-        <div class="chips"><span class="chip">${scopeShort[f.scope] || ''}</span>${f.attack ? '<span class="chip accent">加撃系</span>' : ''}</div>
-        ${custom ? `<button class="icon-btn" data-action="edit-fruit" data-f="${esc(f.id)}" aria-label="編集">✎</button>
-          <button class="icon-btn danger" data-action="del-fruit" data-f="${esc(f.id)}" aria-label="削除">✕</button>` : ''}</div>`;
-    return `<div class="page-head"><h2 class="page-title">実の一覧</h2>
-        <button class="btn primary" data-action="add-fruit">＋ 実を追加</button></div>
-      <h3 class="section-title">自分で追加した実</h3>
-      ${state.customFruits.length ? `<div class="list">${state.customFruits.map((f) => row(f, true)).join('')}</div>` : '<p class="empty" style="padding:12px">新しい実がゲームに増えたら、ここから追加できます。</p>'}
-      ${Object.keys(groups).map((g) => `<h3 class="section-title">${esc(g)}</h3><div class="list">${groups[g].map((f) => row(f)).join('')}</div>`).join('')}`;
-  }
-
-  function viewData() {
-    let theme = '';
-    try { theme = localStorage.getItem(THEME_KEY) || ''; } catch (e) { /* noop */ }
-    const seg = [['', '端末に合わせる'], ['light', 'ライト'], ['dark', 'ダーク']].map(([v, l]) =>
-      `<button data-action="theme" data-v="${v}" class="${theme === v ? 'active' : ''}">${l}</button>`).join('');
-    return `<div class="page-head"><h2 class="page-title">データ</h2></div>
-      <h3 class="section-title">表示</h3>
-      <div class="seg" role="group" aria-label="テーマ">${seg}</div>
-      <h3 class="section-title">バックアップ</h3>
       <div class="card">
-        <p class="card-sub" style="margin:0 0 12px">メモはこの端末のブラウザにだけ保存されています。機種変更の前に書き出しておくと、新しい端末で読み込めます。</p>
-        <div class="btn-row">
-          <button class="btn primary" data-action="export">JSONを書き出す</button>
-          <label class="btn">JSONを読み込む<input type="file" accept="application/json,.json" data-action="import" hidden></label>
+        <h3 class="card-title">編成の相性</h3>
+        ${synergy}
+      </div>
+
+      <div class="stack">${slots}</div>
+
+      <div class="card">
+        <label class="field">
+          <span>パーティのメモ</span>
+          <textarea data-party-field="memo" rows="4" maxlength="1000" placeholder="立ち回りや、実の付け替え候補など">${esc(party.memo)}</textarea>
+        </label>
+      </div>
+
+      <div class="row-actions">
+        <button class="btn" data-action="dup-party" data-id="${esc(party.id)}">複製する</button>
+        <button class="btn danger" data-action="delete-party" data-id="${esc(party.id)}">削除する</button>
+      </div>
+    </section>`;
+}
+
+/* ---------- 画面：やること（キャラ別の厳選リスト） ---------- */
+
+let todoFilter = 'open';
+
+function viewTodo() {
+  const byChar = new Map();
+  for (const party of state.parties) {
+    party.members.forEach((m, i) => {
+      const c = charById(m.charId);
+      if (!c) return;
+      plansOf(m).forEach((p, k) => {
+        if (!p.fruitId) return;
+        if (todoFilter === 'open' && p.status === 'done') return;
+        const f = fruitById(p.fruitId);
+        if (!f) return;
+        if (!byChar.has(c.id)) byChar.set(c.id, { c, rows: [] });
+        byChar.get(c.id).rows.push({ party, i, k, p, f });
+      });
+    });
+  }
+
+  const order = { doing: 0, todo: 1, compromise: 2, done: 3 };
+  const groups = [...byChar.values()].sort((x, y) => {
+    const dx = x.rows.some((r) => r.p.status === 'doing') ? 0 : 1;
+    const dy = y.rows.some((r) => r.p.status === 'doing') ? 0 : 1;
+    return dx - dy || x.c.name.localeCompare(y.c.name, 'ja');
+  });
+
+  const body = groups.map(({ c, rows }) => {
+    rows.sort((x, y) => order[x.p.status] - order[y.p.status]);
+    return `
+      <article class="card todo-card">
+        <div class="todo-head">
+          <h3>${esc(c.name)}</h3>
+          <div class="chips">${chips(c)}</div>
+        </div>
+        <ul class="todo-list">
+          ${rows.map((r) => `
+            <li class="todo-row status-${esc(r.p.status)}">
+              <div class="todo-main">
+                <b>${esc(r.f.short)}</b>
+                <span class="grade">${esc(r.p.current || 'なし')} → ${esc(r.p.target || '未設定')}</span>
+                ${r.p.status !== 'done' && bankCovers(r.p.fruitId, r.p.target) ? '<a class="badge in-bank" href="#/bank">バンクにあり</a>' : ''}
+              </div>
+              <div class="todo-sub">
+                <a href="#/party/${esc(r.party.id)}">${esc(r.party.name)}</a>
+                <select data-todo="${esc(r.party.id)}" data-slot="${r.i}" data-k="${r.k}" aria-label="状態">
+                  ${options(DATA.statuses.map((s) => ({ value: s.id, label: s.label })), r.p.status)}
+                </select>
+              </div>
+            </li>`).join('')}
+        </ul>
+      </article>`;
+  }).join('');
+
+  return `
+    <section>
+      <div class="section-head">
+        <h2>やること</h2>
+        <div class="seg" role="group" aria-label="表示する範囲">
+          <button class="${todoFilter === 'open' ? 'on' : ''}" data-action="todo-filter" data-value="open">未完了</button>
+          <button class="${todoFilter === 'all' ? 'on' : ''}" data-action="todo-filter" data-value="all">すべて</button>
+        </div>
+      </div>
+      <p class="muted lead">英雄の神殿でリーダーにするキャラごとに、狙っている実をまとめています。</p>
+      ${groups.length ? `<div class="stack">${body}</div>` : emptyBox(
+        todoFilter === 'open' ? '未完了の厳選はありません。' : 'まだ狙う実が登録されていません。',
+        '<a class="btn" href="#/parties">パーティを開く</a>'
+      )}
+    </section>`;
+}
+
+/* ---------- 画面：わくわくバンク ---------- */
+
+function viewBank() {
+  const { complete, upgrade, noTarget, completeCount } = bankMatches();
+  const total = state.bank.reduce((n, b) => n + b.count, 0);
+  const upgradeCount = new Set(upgrade.flatMap((x) => x.targets.map((t) => t.key))).size;
+  const gradeText = (rank) => (rank < 999 ? DATA.grades[rank] : 'なし');
+
+  const entryCard = ({ entry, targets }, isComplete) => {
+    const f = fruitById(entry.fruitId);
+    return `
+      <article class="card bank-hit${isComplete ? ' is-complete' : ''}">
+        <div class="bank-hit-head">
+          <b>${esc(f ? f.short : '（消した実）')}</b>
+          <span class="badge grade-badge">${esc(entry.grade)}</span>
+          <span class="badge self">×${entry.count}</span>
+          ${targets.length > entry.count ? `<span class="badge bond">候補${targets.length}体に${entry.count}個</span>` : ''}
+        </div>
+        <ul class="bank-targets">
+          ${targets.map((t) => `
+            <li>
+              <div class="bank-target-main">
+                <b>${esc(t.c.name)}</b>
+                <span class="grade">今 ${esc(gradeText(t.current))} → 目標 ${esc(gradeText(t.target))}</span>
+                <span class="party-meta">${t.parties.map((p) => `<a href="#/party/${esc(p.id)}">${esc(p.name)}</a>`).join('、')}</span>
+              </div>
+              <button class="btn${isComplete ? ' primary' : ''}" data-action="bank-move" data-id="${esc(entry.id)}" data-key="${esc(t.key)}">移した</button>
+            </li>`).join('')}
+        </ul>
+      </article>`;
+  };
+
+  const list = state.bank.map((b) => {
+    const f = fruitById(b.fruitId);
+    return `
+      <li>
+        <b>${esc(f ? f.short : '（消した実）')}</b>
+        <span>${esc(b.grade)}・${b.count}個${b.memo ? `・${esc(b.memo)}` : ''}</span>
+        <span class="fruit-actions">
+          <button class="icon-btn" data-action="edit-bank" data-id="${esc(b.id)}" aria-label="編集">✎</button>
+          <button class="icon-btn danger" data-action="delete-bank" data-id="${esc(b.id)}" aria-label="削除">×</button>
+        </span>
+      </li>`;
+  }).join('');
+
+  return `
+    <section>
+      <div class="section-head">
+        <h2>わくわくバンク</h2>
+        <button class="btn primary" data-action="new-bank">＋ 実を登録</button>
+      </div>
+      <p class="muted lead">バンクに入れている実を登録すると、パーティで狙っている実と照らし合わせて、移せば厳選が終わるキャラを探します。</p>
+      <div class="stats">
+        <div class="stat"><span>バンクの実</span><b>${total}</b></div>
+        <div class="stat ok"><span>移せば完了</span><b>${completeCount}</b></div>
+        <div class="stat"><span>等級が上がる</span><b>${upgradeCount}</b></div>
+      </div>
+
+      <h3 class="group-title">移せば厳選完了</h3>
+      ${complete.length ? `<div class="stack">${complete.map((x) => entryCard(x, true)).join('')}</div>`
+        : `<p class="muted">${state.bank.length ? '今のバンクの中に、移せば目標の等級に届く実はありません。' : 'バンクの実を登録すると、ここに候補が出ます。'}</p>`}
+
+      ${upgrade.length ? `<h3 class="group-title">目標には届かないが、今より等級が上がる</h3>
+        <div class="stack">${upgrade.map((x) => entryCard(x, false)).join('')}</div>` : ''}
+
+      ${noTarget.length ? `<p class="muted small">目標の等級が未設定なので判定していない枠：${noTarget.map((t) => `${esc(t.c.name)}の${esc(fruitById(t.fruitId).short)}`).join('、')}</p>` : ''}
+
+      <div class="card">
+        <h3 class="card-title">バンクに入っている実</h3>
+        ${list ? `<ul class="fruit-list">${list}</ul>` : '<p class="muted">まだ登録されていません。</p>'}
+      </div>
+    </section>`;
+}
+
+/* ---------- 画面：キャラ ---------- */
+
+function viewChars() {
+  const usage = (id) => state.parties.filter((p) => p.members.some((m) => m.charId === id)).length;
+  const list = [...state.characters].sort((x, y) => x.name.localeCompare(y.name, 'ja'));
+  const items = list.map((c) => `
+    <article class="card char-card">
+      <div class="char-card-head">
+        <h3>${esc(c.name)}</h3>
+        <div class="char-actions">
+          <button class="icon-btn" data-action="edit-char" data-id="${esc(c.id)}" aria-label="${esc(c.name)}を編集">✎</button>
+          <button class="icon-btn danger" data-action="delete-char" data-id="${esc(c.id)}" aria-label="${esc(c.name)}を削除">×</button>
+        </div>
+      </div>
+      <div class="chips">${chips(c)}</div>
+      ${c.memo ? `<p class="char-memo">${esc(c.memo)}</p>` : ''}
+      <p class="party-meta">${usage(c.id)} 個のパーティで使用中</p>
+    </article>`).join('');
+
+  return `
+    <section>
+      <div class="section-head">
+        <h2>キャラ</h2>
+        <button class="btn primary" data-action="new-char">＋ 登録</button>
+      </div>
+      ${list.length ? `<div class="grid">${items}</div>` : emptyBox(
+        'キャラ名と種族・撃種・戦型を登録すると、どのパーティでも使い回せます。',
+        '<button class="btn primary" data-action="new-char">キャラを登録する</button>'
+      )}
+    </section>`;
+}
+
+/* ---------- 画面：実の一覧 ---------- */
+
+function viewFruits() {
+  const section = (scope) => {
+    const list = DATA.fruits.filter((f) => f.scope === scope);
+    return `
+      <div class="card">
+        <h3 class="card-title">${DATA.scopes[scope]}<small>${esc(DATA.scopeHelp[scope])}</small></h3>
+        <ul class="fruit-list">
+          ${list.map((f) => `<li><b>${esc(f.name)}</b><span>${esc(f.desc)}</span></li>`).join('')}
+        </ul>
+      </div>`;
+  };
+  const custom = state.customFruits.map((f) => `
+    <li>
+      <b>${esc(f.name)}</b>
+      <span>${esc(DATA.scopes[f.scope])}${f.desc ? `・${esc(f.desc)}` : ''}</span>
+      <span class="fruit-actions">
+        <button class="icon-btn" data-action="edit-fruit" data-id="${esc(f.id)}" aria-label="${esc(f.name)}を編集">✎</button>
+        <button class="icon-btn danger" data-action="delete-fruit" data-id="${esc(f.id)}" aria-label="${esc(f.name)}を削除">×</button>
+      </span>
+    </li>`).join('');
+
+  return `
+    <section>
+      <h2>実の一覧</h2>
+      <div class="card rules">
+        <h3 class="card-title">重なり方のルール</h3>
+        <p>加撃・加撃速・加命撃のように<strong>名前が違う実は効果が重なります</strong>。同族加撃・撃種加撃・戦型加撃を別々のキャラに分けてつければ、条件のそろった味方には全部乗ります。</p>
+        <p>同じ名前の絆の実を、同じ種族（撃種・戦型）どうしで持っても1つ分しか効きません。クエスト全体に効く実も、パーティで1つ分です。同じキャラに同じ実を2つつけた場合も1つ分で、一撃失心の力だけが例外です。</p>
+        <p class="muted">超戦型は通常の戦型と同じ扱いです（例：パワー型と超パワー型は同戦型）。</p>
+      </div>
+      ${section('race')}
+      ${section('hit')}
+      ${section('type')}
+      ${section('self')}
+      ${section('quest')}
+      <div class="card">
+        <div class="section-head tight">
+          <h3 class="card-title">自分で追加した実</h3>
+          <button class="btn" data-action="new-fruit">＋ 追加</button>
+        </div>
+        ${custom ? `<ul class="fruit-list">${custom}</ul>` : '<p class="muted">新しい実が実装されたときは、ここに追加すると選択肢に出ます。</p>'}
+      </div>
+    </section>`;
+}
+
+/* ---------- 画面：データ ---------- */
+
+function viewData() {
+  const used = (() => {
+    try {
+      return new Blob([localStorage.getItem(STORE_KEY) || '']).size;
+    } catch (e) {
+      return 0;
+    }
+  })();
+  return `
+    <section>
+      <h2>データ</h2>
+      <div class="card">
+        <h3 class="card-title">表示</h3>
+        <div class="seg" role="group" aria-label="テーマ">
+          ${[['', '端末に合わせる'], ['light', 'ライト'], ['dark', 'ダーク']].map(([v, l]) =>
+            `<button class="${themeSetting() === v ? 'on' : ''}" data-action="theme" data-value="${v}">${l}</button>`).join('')}
         </div>
       </div>
       <div class="card">
-        <p class="card-sub" style="margin:0 0 12px">キャラ ${state.chars.length}体・パーティ ${state.parties.length}個・バンクの実 ${state.bank.length}種類・自分で追加した実 ${state.customFruits.length}個</p>
-        <button class="btn danger" data-action="reset">すべて消す</button>
-      </div>`;
-  }
+        <h3 class="card-title">実の枠の数</h3>
+        <div class="seg" role="group" aria-label="実の枠の数">
+          <button class="${state.settings.slotCount === 3 ? 'on' : ''}" data-action="slot-count" data-value="3">3つ</button>
+          <button class="${state.settings.slotCount === 4 ? 'on' : ''}" data-action="slot-count" data-value="4">4つ</button>
+        </div>
+        <p class="muted">4つ目の枠を使うキャラがいる場合は「4つ」にします。3つに戻しても4つ目のメモは消えません。</p>
+      </div>
+      <div class="card">
+        <h3 class="card-title">書き出し・読み込み</h3>
+        <p>メモはこの端末のブラウザに自動で保存されています。機種変更やバックアップのときは、ファイルに書き出してから別の端末で読み込んでください。</p>
+        <div class="row-actions">
+          <button class="btn primary" data-action="export">ファイルに書き出す</button>
+          <button class="btn" data-action="import">ファイルから読み込む</button>
+        </div>
+        <input type="file" id="importFile" accept="application/json,.json" hidden>
+        <p class="muted">キャラ ${state.characters.length} 体・パーティ ${state.parties.length} 個・バンクの実 ${state.bank.length} 種類・使用量 約 ${Math.ceil(used / 1024)} KB</p>
+      </div>
+      <div class="card">
+        <h3 class="card-title">全部消す</h3>
+        <p>この端末に保存したキャラ・パーティ・追加した実をすべて消します。元に戻せないので、先に書き出しておくと安心です。</p>
+        <button class="btn danger" data-action="reset">すべてのデータを消す</button>
+      </div>
+      <p class="muted small">ブラウザのサイトデータを消すとメモも消えます。ホーム画面に追加すると、電波がなくても開けます。</p>
+    </section>`;
+}
 
-  // ───────── ボトムシート ─────────
-  function openSheet(dlg) { dlg.classList.remove('closing'); dlg.showModal(); }
-  function closeSheet(dlg) {
-    if (!dlg.open || dlg.classList.contains('closing')) return;
-    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (reduce) { dlg.close(); return; }
-    dlg.classList.add('closing');
-    dlg.addEventListener('animationend', function done(e) {
-      if (e.target !== dlg) return;
-      dlg.removeEventListener('animationend', done);
-      dlg.classList.remove('closing');
-      dlg.close();
+/* ---------- ルーティング ---------- */
+
+function currentRoute() {
+  const hash = location.hash.replace(/^#\/?/, '');
+  const [name, id] = hash.split('/');
+  return { name: name || 'parties', id: id ? decodeURIComponent(id) : '' };
+}
+
+function render() {
+  const { name, id } = currentRoute();
+  const active = document.activeElement?.dataset?.fk;
+  const views = {
+    parties: viewParties,
+    party: () => viewParty(id),
+    todo: viewTodo,
+    bank: viewBank,
+    chars: viewChars,
+    fruits: viewFruits,
+    data: viewData
+  };
+  const app = $('#app');
+  app.innerHTML = (views[name] || viewParties)();
+
+  const tab = name === 'party' ? 'parties' : name;
+  $$('.tabbar a').forEach((a) => {
+    const on = a.dataset.tab === tab;
+    a.classList.toggle('active', on);
+    if (on) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
+
+  if (active) {
+    const el = app.querySelector(`[data-fk="${CSS.escape(active)}"]`);
+    if (el) el.focus({ preventScroll: true });
+  }
+}
+
+let lastRoute = '';
+window.addEventListener('hashchange', () => {
+  const r = location.hash;
+  render();
+  if (r !== lastRoute) window.scrollTo(0, 0);
+  lastRoute = r;
+});
+
+/* ---------- ダイアログ ---------- */
+
+// 開くときと同じ経路（下へスライド）で閉じてから、dialog を閉じる
+function closeSheet(dlg) {
+  if (!dlg?.open || dlg.classList.contains('closing')) return;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    dlg.close();
+    return;
+  }
+  dlg.classList.add('closing');
+  const done = (e) => {
+    if (e.target !== dlg) return;
+    dlg.removeEventListener('animationend', done);
+    dlg.classList.remove('closing');
+    dlg.close();
+  };
+  dlg.addEventListener('animationend', done);
+}
+
+let charSaved = null;
+
+function openCharDialog(c, onSaved) {
+  const dlg = $('#charDialog');
+  const form = $('#charForm');
+  form.reset();
+  $('#charDialogTitle').textContent = c ? 'キャラを編集' : 'キャラを登録';
+  form.elements.id.value = c?.id || '';
+  form.elements.name.value = c?.name || '';
+  form.elements.race.value = c?.race || '';
+  form.elements.hit.value = c?.hit || DATA.hits[0];
+  form.elements.type.value = c?.type || DATA.types[0];
+  form.elements.memo.value = c?.memo || '';
+  charSaved = onSaved || null;
+  dlg.showModal();
+  setTimeout(() => form.elements.name.focus(), 50);
+}
+
+$('#charForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const f = e.target.elements;
+  const data = {
+    name: f.name.value.trim(),
+    race: f.race.value.trim(),
+    hit: f.hit.value,
+    type: f.type.value,
+    memo: f.memo.value.trim()
+  };
+  if (!data.name || !data.race) return;
+  let c = charById(f.id.value);
+  if (c) {
+    Object.assign(c, data);
+  } else {
+    c = { id: uid(), ...data };
+    state.characters.push(c);
+  }
+  save();
+  closeSheet($('#charDialog'));
+  if (charSaved) charSaved(c);
+  charSaved = null;
+  render();
+  toast(`${c.name}を保存しました`);
+});
+
+function openFruitDialog(fr) {
+  const form = $('#fruitForm');
+  form.reset();
+  $('#fruitDialogTitle').textContent = fr ? '実を編集' : '実を追加';
+  form.elements.id.value = fr?.id || '';
+  form.elements.name.value = fr?.name || '';
+  form.elements.scope.value = fr?.scope || 'self';
+  form.elements.attack.checked = !!fr?.attack;
+  form.elements.desc.value = fr?.desc || '';
+  $('#fruitDialog').showModal();
+  setTimeout(() => form.elements.name.focus(), 50);
+}
+
+$('#fruitForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const f = e.target.elements;
+  const name = f.name.value.trim();
+  if (!name) return;
+  const data = { name, short: name, scope: f.scope.value, attack: f.attack.checked, desc: f.desc.value.trim(), custom: true };
+  const existing = state.customFruits.find((x) => x.id === f.id.value);
+  if (existing) Object.assign(existing, data);
+  else state.customFruits.push({ id: `custom-${uid()}`, ...data });
+  save();
+  closeSheet($('#fruitDialog'));
+  render();
+});
+
+function openBankDialog(b) {
+  const form = $('#bankForm');
+  form.reset();
+  $('#bankDialogTitle').textContent = b ? 'バンクの実を編集' : 'バンクに実を登録';
+  form.elements.id.value = b?.id || '';
+  form.elements.fruit.innerHTML = fruitOptions(b?.fruitId || '', '— 実を選ぶ —');
+  form.elements.grade.innerHTML = options(DATA.grades, b?.grade || DATA.grades[0]);
+  form.elements.count.value = b?.count || 1;
+  form.elements.memo.value = b?.memo || '';
+  $('#bankDialog').showModal();
+}
+
+$('#bankForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const f = e.target.elements;
+  const data = {
+    fruitId: f.fruit.value,
+    grade: f.grade.value,
+    count: Math.min(99, Math.max(1, Math.floor(Number(f.count.value)) || 1)),
+    memo: f.memo.value.trim()
+  };
+  if (!data.fruitId || !DATA.grades.includes(data.grade)) return;
+  const existing = state.bank.find((x) => x.id === f.id.value);
+  if (existing) {
+    Object.assign(existing, data);
+  } else {
+    const same = state.bank.find((x) => x.fruitId === data.fruitId && x.grade === data.grade && x.memo === data.memo);
+    if (same) same.count = Math.min(99, same.count + data.count);
+    else state.bank.push({ id: uid(), ...data });
+  }
+  save();
+  closeSheet($('#bankDialog'));
+  render();
+  const n = bankMatches().complete
+    .filter((x) => x.entry.fruitId === data.fruitId && x.entry.grade === data.grade)
+    .reduce((sum, x) => sum + x.targets.length, 0);
+  toast(n ? `移せば完了になるキャラが${n}体見つかりました` : 'バンクに登録しました');
+});
+
+function themeSetting() {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    return v === 'light' || v === 'dark' ? v : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+/* ---------- 操作 ---------- */
+
+function setPlan(party, i, k, key, value) {
+  const member = party.members[i];
+  plansOf(member);
+  const p = member.plans[k];
+  if (key === 'fruitId') {
+    p.fruitId = value;
+    if (value && !p.target) p.target = '特級L';
+    if (!value) Object.assign(p, emptyPlan());
+  } else if (key === 'current') {
+    p.current = value;
+    // 目標に届いたら完了、届いていなければ厳選中にする
+    if (value && p.target && gradeRank(value) <= gradeRank(p.target)) p.status = 'done';
+    else if (value && p.status === 'todo') p.status = 'doing';
+  } else {
+    p[key] = value;
+  }
+  touch(party);
+}
+
+const actions = {
+  'new-party'() {
+    const p = newParty(`パーティ${state.parties.length + 1}`);
+    state.parties.push(p);
+    save();
+    location.hash = `#/party/${p.id}`;
+  },
+  'dup-party'(el) {
+    const src = partyById(el.dataset.id);
+    if (!src) return;
+    const copy = JSON.parse(JSON.stringify(src));
+    copy.id = uid();
+    copy.name = `${src.name}（コピー）`;
+    copy.updatedAt = Date.now();
+    state.parties.push(copy);
+    save();
+    location.hash = `#/party/${copy.id}`;
+    toast('パーティを複製しました');
+  },
+  'delete-party'(el) {
+    const p = partyById(el.dataset.id);
+    if (!p || !confirm(`「${p.name}」を削除しますか？`)) return;
+    state.parties = state.parties.filter((x) => x !== p);
+    save();
+    location.hash = '#/parties';
+    toast('パーティを削除しました');
+  },
+  'new-char'() {
+    openCharDialog(null);
+  },
+  'edit-char'(el) {
+    openCharDialog(charById(el.dataset.id));
+  },
+  'delete-char'(el) {
+    const c = charById(el.dataset.id);
+    if (!c) return;
+    const used = state.parties.filter((p) => p.members.some((m) => m.charId === c.id));
+    const msg = used.length
+      ? `「${c.name}」を削除しますか？\n${used.length}個のパーティから外れ、その枠の実のメモも消えます。`
+      : `「${c.name}」を削除しますか？`;
+    if (!confirm(msg)) return;
+    for (const p of used) {
+      for (const m of p.members) {
+        if (m.charId === c.id) {
+          m.charId = null;
+          m.plans = [];
+        }
+      }
+    }
+    state.characters = state.characters.filter((x) => x !== c);
+    save();
+    render();
+  },
+  'new-fruit'() {
+    openFruitDialog(null);
+  },
+  'edit-fruit'(el) {
+    openFruitDialog(state.customFruits.find((f) => f.id === el.dataset.id));
+  },
+  'delete-fruit'(el) {
+    const fr = state.customFruits.find((f) => f.id === el.dataset.id);
+    if (!fr || !confirm(`「${fr.name}」を削除しますか？\nこの実を狙っているメモも空欄に戻り、バンクからも消えます。`)) return;
+    state.customFruits = state.customFruits.filter((f) => f !== fr);
+    state.bank = state.bank.filter((b) => b.fruitId !== fr.id);
+    for (const p of state.parties) {
+      for (const m of p.members) {
+        m.plans = m.plans.map((pl) => (pl.fruitId === fr.id ? emptyPlan() : pl));
+      }
+    }
+    save();
+    render();
+  },
+  'new-bank'() {
+    openBankDialog(null);
+  },
+  'edit-bank'(el) {
+    openBankDialog(state.bank.find((b) => b.id === el.dataset.id));
+  },
+  'delete-bank'(el) {
+    const b = state.bank.find((x) => x.id === el.dataset.id);
+    if (!b) return;
+    const before = JSON.stringify(state);
+    state.bank = state.bank.filter((x) => x !== b);
+    save();
+    render();
+    toast('バンクの実を消しました', () => {
+      state = normalize(JSON.parse(before));
+      save();
+      render();
     });
-  }
-  document.querySelectorAll('dialog.sheet').forEach((dlg) => {
-    dlg.addEventListener('cancel', (e) => { e.preventDefault(); closeSheet(dlg); });
-    dlg.addEventListener('click', (e) => {
-      if (e.target === dlg) closeSheet(dlg); // 背景（::backdrop）のタップで閉じる
-      if (e.target.closest('[data-action="close-dialog"]')) closeSheet(dlg);
-    });
-  });
-
-  // キャラ
-  const charDialog = document.getElementById('charDialog');
-  const charForm = document.getElementById('charForm');
-  charForm.hit.innerHTML = D.hits.map((h) => `<option>${h}</option>`).join('');
-  charForm.type.innerHTML = D.types.map((t) => `<option>${t}</option>`).join('');
-  function refreshRaceList() {
-    const races = [...new Set(D.races.concat(state.chars.map((c) => c.race)))];
-    document.getElementById('raceList').innerHTML = races.map((r) => `<option value="${esc(r)}">`).join('');
-  }
-  function openChar(c) {
-    refreshRaceList();
-    document.getElementById('charDialogTitle').textContent = c ? 'キャラを編集' : 'キャラを登録';
-    charForm.reset();
-    charForm.id.value = c ? c.id : '';
-    if (c) { charForm.name.value = c.name; charForm.race.value = c.race; charForm.hit.value = c.hit; charForm.type.value = c.type; charForm.memo.value = c.memo || ''; }
-    openSheet(charDialog);
-  }
-  charForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const v = { name: charForm.name.value.trim(), race: charForm.race.value.trim(), hit: charForm.hit.value, type: charForm.type.value, memo: charForm.memo.value.trim() };
-    if (!v.name || !v.race) return;
-    const c = state.chars.find((x) => x.id === charForm.id.value);
-    if (c) Object.assign(c, v); else state.chars.push(Object.assign({ id: uid() }, v));
-    save(); render(); closeSheet(charDialog);
-  });
-
-  // 自分で追加する実
-  const fruitDialog = document.getElementById('fruitDialog');
-  const fruitForm = document.getElementById('fruitForm');
-  fruitForm.scope.innerHTML = Object.entries(D.scopes).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
-  function openFruit(f) {
-    document.getElementById('fruitDialogTitle').textContent = f ? '実を編集' : '実を追加';
-    fruitForm.reset();
-    fruitForm.id.value = f ? f.id : '';
-    if (f) { fruitForm.name.value = f.name; fruitForm.scope.value = f.scope; fruitForm.attack.checked = !!f.attack; fruitForm.desc.value = f.desc || ''; }
-    openSheet(fruitDialog);
-  }
-  fruitForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const v = { name: fruitForm.name.value.trim(), scope: fruitForm.scope.value, attack: fruitForm.attack.checked, desc: fruitForm.desc.value.trim() };
-    if (!v.name) return;
-    const f = state.customFruits.find((x) => x.id === fruitForm.id.value);
-    const clash = allFruits().find((x) => x.name === v.name && (!f || x.id !== f.id));
-    if (clash) { toast('同じ名前の実がすでにあります'); return; }
-    if (f) renameFruitEverywhere(f.name, v.name);
-    if (f) Object.assign(f, v); else state.customFruits.push(Object.assign({ id: uid() }, v));
-    save(); render(); closeSheet(fruitDialog);
-  });
-  function renameFruitEverywhere(from, to) {
-    if (from === to) return;
-    state.parties.forEach((p) => p.members.forEach((m) => m.slots.forEach((s) => { if (s.fruit === from) s.fruit = to; })));
-    state.bank.forEach((b) => { if (b.fruit === from) b.fruit = to; });
-  }
-
-  // バンク
-  const bankDialog = document.getElementById('bankDialog');
-  const bankForm = document.getElementById('bankForm');
-  function openBank(b) {
-    document.getElementById('bankDialogTitle').textContent = b ? 'バンクの実を編集' : 'バンクに実を登録';
-    bankForm.reset();
-    bankForm.fruit.innerHTML = fruitOptions(b ? b.fruit : '', false);
-    bankForm.grade.innerHTML = gradeOptions(b ? b.grade : D.grades[0]);
-    bankForm.id.value = b ? b.id : '';
-    bankForm.count.value = b ? b.count : 1;
-    bankForm.memo.value = b ? b.memo : '';
-    openSheet(bankDialog);
-  }
-  bankForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const v = {
-      fruit: bankForm.fruit.value, grade: bankForm.grade.value,
-      count: Math.max(1, Math.min(99, parseInt(bankForm.count.value, 10) || 1)), memo: bankForm.memo.value.trim()
-    };
-    if (!v.fruit) return;
-    const b = state.bank.find((x) => x.id === bankForm.id.value);
-    if (b) Object.assign(b, v);
-    else {
-      const same = state.bank.find((x) => x.fruit === v.fruit && x.grade === v.grade && x.memo === v.memo);
-      if (same) same.count = Math.min(99, same.count + v.count); else state.bank.push(Object.assign({ id: uid() }, v));
-    }
-    save(); render(); closeSheet(bankDialog);
-    const n = bankMatches().complete.filter((x) => x.entry.fruit === v.fruit && x.entry.grade === v.grade).reduce((a, x) => a + x.targets.length, 0);
-    if (n) toast(`移せば完了になるキャラが ${n}体 見つかりました`);
-  });
-
-  // ───────── 操作 ─────────
-  const findParty = (id) => state.parties.find((p) => p.id === id);
-
-  app.addEventListener('click', (e) => {
-    const el = e.target.closest('[data-action]');
-    if (!el || el.tagName === 'SELECT' || el.tagName === 'INPUT') return;
-    const a = el.dataset.action;
-    const p = el.dataset.p ? findParty(el.dataset.p) : null;
-    switch (a) {
-      case 'add-party': {
-        const np = { id: uid(), name: `パーティ${state.parties.length + 1}`, members: [] };
-        state.parties.push(np); state = normalize(state); save();
-        location.hash = '#/party/' + np.id;
-        break;
-      }
-      case 'del-party':
-        if (p && confirm(`「${p.name}」を削除しますか？`)) {
-          state.parties = state.parties.filter((x) => x !== p); save(); location.hash = '#/parties';
-        }
-        break;
-      case 'add-slot':
-        if (p) { const m = p.members[+el.dataset.m]; if (m.slots.length < D.slotsPerChar) m.slots.push({ fruit: '', target: '', current: '', status: '未着手' }); save(); render(); }
-        break;
-      case 'del-slot':
-        if (p) { p.members[+el.dataset.m].slots.splice(+el.dataset.s, 1); save(); render(); }
-        break;
-      case 'add-char': openChar(null); break;
-      case 'edit-char': openChar(charById(el.dataset.c)); break;
-      case 'del-char': {
-        const c = charById(el.dataset.c);
-        if (c && confirm(`「${c.name}」を削除しますか？\nパーティのこのキャラの枠も空になります。`)) {
-          state.chars = state.chars.filter((x) => x !== c);
-          state.parties.forEach((pp) => pp.members.forEach((m) => { if (m.charId === c.id) { m.charId = ''; m.slots = []; } }));
-          save(); render();
-        }
-        break;
-      }
-      case 'add-fruit': openFruit(null); break;
-      case 'edit-fruit': openFruit(state.customFruits.find((f) => f.id === el.dataset.f)); break;
-      case 'del-fruit': {
-        const f = state.customFruits.find((x) => x.id === el.dataset.f);
-        if (f && confirm(`「${f.name}」を一覧から消しますか？\nパーティやバンクのメモは残ります。`)) { state.customFruits = state.customFruits.filter((x) => x !== f); save(); render(); }
-        break;
-      }
-      case 'add-bank': openBank(null); break;
-      case 'edit-bank': openBank(state.bank.find((b) => b.id === el.dataset.b)); break;
-      case 'del-bank': {
-        const b = state.bank.find((x) => x.id === el.dataset.b);
-        if (b) {
-          const before = JSON.stringify(state);
-          state.bank = state.bank.filter((x) => x !== b); save(); render();
-          toast(`${b.fruit}（${b.grade}）を消しました`, () => { state = normalize(JSON.parse(before)); save(); render(); });
-        }
-        break;
-      }
-      case 'move': moveFromBank(el.dataset.b, el.dataset.key); break;
-      case 'theme': {
-        const v = el.dataset.v;
-        try { if (v) localStorage.setItem(THEME_KEY, v); else localStorage.removeItem(THEME_KEY); } catch (err) { /* noop */ }
-        if (v) document.documentElement.setAttribute('data-theme', v); else document.documentElement.removeAttribute('data-theme');
-        render();
-        break;
-      }
-      case 'export': exportJSON(); break;
-      case 'reset':
-        if (confirm('キャラ・パーティ・バンクなど、すべてのメモを消します。元に戻せません。よろしいですか？')) { state = emptyState(); save(); render(); toast('すべて消しました'); }
-        break;
-    }
-  });
-
-  app.addEventListener('change', (e) => {
-    const el = e.target;
-    if (el.dataset.action === 'import') { importJSON(el.files[0]); el.value = ''; return; }
-    const p = el.dataset.p ? findParty(el.dataset.p) : null;
-    if (!p) return;
-    if (el.dataset.action === 'rename-party') { p.name = el.value.trim() || p.name; save(); return; }
-    if (el.dataset.action === 'set-member') {
-      const m = p.members[+el.dataset.m];
-      m.charId = el.value;
-      if (m.charId && !m.slots.length) m.slots.push({ fruit: '', target: '', current: '', status: '未着手' });
-      save(); render(); return;
-    }
-    if (el.dataset.k) {
-      const s = p.members[+el.dataset.m].slots[+el.dataset.s];
-      s[el.dataset.k] = el.value;
-      // 今の等級が目標に届いたら自動で完了にする
-      if ((el.dataset.k === 'current' || el.dataset.k === 'target') && rank(s.target) >= 0 && rank(s.current) >= rank(s.target)) s.status = '完了';
-      else if (el.dataset.k === 'current' && s.status === '未着手' && s.current) s.status = '厳選中';
-      save(); render();
-    }
-  });
-
-  function exportJSON() {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
+  },
+  'bank-move'(el) {
+    moveFromBank(el.dataset.id, el.dataset.key);
+  },
+  theme(el) {
+    const v = el.dataset.value;
+    try {
+      if (v) localStorage.setItem(THEME_KEY, v);
+      else localStorage.removeItem(THEME_KEY);
+    } catch (e) { /* 保存できなくても、この表示中だけは切り替える */ }
+    if (v) document.documentElement.setAttribute('data-theme', v);
+    else document.documentElement.removeAttribute('data-theme');
+    render();
+  },
+  'todo-filter'(el) {
+    todoFilter = el.dataset.value;
+    render();
+  },
+  'slot-count'(el) {
+    state.settings.slotCount = Number(el.dataset.value) === 4 ? 4 : 3;
+    save();
+    render();
+  },
+  export() {
+    const json = JSON.stringify({ ...state, exportedAt: new Date().toISOString() }, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
     const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const name = `wakuwaku-memo-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}.json`;
+    const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `wakuwaku-memo-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}.json`;
-    document.body.appendChild(a); a.click(); a.remove();
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast(`${name} を書き出しました`);
+  },
+  import() {
+    $('#importFile')?.click();
+  },
+  reset() {
+    if (!confirm('すべてのデータを消します。元に戻せません。よろしいですか？')) return;
+    state = defaultState();
+    save();
+    render();
+    toast('データを消しました');
+  },
+  'close-dialog'(el) {
+    closeSheet(el.closest('dialog'));
   }
-  function importJSON(file) {
+};
+
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  const fn = actions[el.dataset.action];
+  if (fn) {
+    e.preventDefault();
+    fn(el);
+  }
+});
+
+document.addEventListener('change', (e) => {
+  const el = e.target;
+
+  if (el.id === 'importFile') {
+    const file = el.files?.[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const data = JSON.parse(reader.result);
-        if (!data || typeof data !== 'object' || !Array.isArray(data.chars)) throw new Error('format');
-        if (!confirm('今のメモを、読み込んだファイルの内容で置き換えます。よろしいですか？')) return;
-        state = normalize(data); save(); render(); toast('読み込みました');
-      } catch (err) { toast('このファイルは読み込めませんでした'); }
+        const raw = JSON.parse(String(reader.result));
+        if (!Array.isArray(raw.characters) || !Array.isArray(raw.parties)) throw new Error('format');
+        const next = normalize(raw);
+        if (!confirm(`キャラ ${next.characters.length} 体・パーティ ${next.parties.length} 個を読み込みます。\n今のデータは置き換わります。よろしいですか？`)) return;
+        state = next;
+        save();
+        render();
+        toast('読み込みました');
+      } catch (err) {
+        toast('このファイルは読み込めませんでした');
+      }
     };
     reader.readAsText(file);
+    el.value = '';
+    return;
   }
 
-  // ───────── トースト ─────────
-  const toastEl = document.getElementById('toast');
-  let toastTimer;
-  function toast(msg, undo) {
-    toastEl.innerHTML = esc(msg) + (undo ? '<button type="button">元に戻す</button>' : '');
-    if (undo) toastEl.querySelector('button').onclick = () => { undo(); hideToast(); };
-    toastEl.classList.add('show');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(hideToast, undo ? 5000 : 2600);
-  }
-  function hideToast() { toastEl.classList.remove('show'); }
+  const { name, id } = currentRoute();
 
-  // ───────── 起動 ─────────
-  const badge = document.getElementById('offlineBadge');
-  const updateOnline = () => { badge.hidden = navigator.onLine; };
-  window.addEventListener('online', updateOnline);
-  window.addEventListener('offline', updateOnline);
+  if (el.dataset.slotChar !== undefined && name === 'party') {
+    const party = partyById(id);
+    const i = Number(el.dataset.slotChar);
+    if (!party) return;
+    if (el.value === '__new') {
+      el.value = party.members[i].charId || '';
+      openCharDialog(null, (c) => {
+        party.members[i].charId = c.id;
+        touch(party);
+      });
+      return;
+    }
+    // キャラを入れ替えても実のメモは引き継ぐ。枠を空にしたときだけ消す
+    party.members[i].charId = el.value || null;
+    if (!el.value) party.members[i].plans = [];
+    touch(party);
+    render();
+    return;
+  }
+
+  if (el.dataset.plan && name === 'party') {
+    const party = partyById(id);
+    if (!party) return;
+    setPlan(party, Number(el.dataset.slot), Number(el.dataset.k), el.dataset.plan, el.value);
+    render();
+    return;
+  }
+
+  if (el.dataset.todo) {
+    const party = partyById(el.dataset.todo);
+    if (!party) return;
+    setPlan(party, Number(el.dataset.slot), Number(el.dataset.k), 'status', el.value);
+    render();
+  }
+});
+
+document.addEventListener('input', (e) => {
+  const el = e.target;
+  if (!el.dataset.partyField) return;
+  const party = partyById(currentRoute().id);
+  if (!party) return;
+  party[el.dataset.partyField] = el.value;
+  touch(party);
+});
+
+// ダイアログの外側（背景）をタップしたら閉じる
+$$('dialog').forEach((dlg) => {
+  dlg.addEventListener('click', (e) => {
+    if (e.target === dlg) closeSheet(dlg);
+  });
+  dlg.addEventListener('cancel', (e) => {
+    e.preventDefault();
+    closeSheet(dlg);
+  });
+});
+
+/* ---------- トースト・オフライン表示 ---------- */
+
+let toastTimer = null;
+function toast(text, undo) {
+  const t = $('#toast');
+  t.textContent = text;
+  if (undo) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = '元に戻す';
+    b.addEventListener('click', () => {
+      undo();
+      t.classList.remove('show');
+    });
+    t.append(b);
+  }
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), undo ? 5000 : 2400);
+}
+
+function updateOnline() {
+  $('#offlineBadge').hidden = navigator.onLine;
+}
+window.addEventListener('online', updateOnline);
+window.addEventListener('offline', updateOnline);
+
+/* ---------- 初期化 ---------- */
+
+function init() {
+  const form = $('#charForm');
+  form.elements.hit.innerHTML = options(DATA.hits, DATA.hits[0]);
+  form.elements.type.innerHTML = options(DATA.types, DATA.types[0]);
+  $('#raceList').innerHTML = DATA.races.map((r) => `<option value="${esc(r)}"></option>`).join('');
+  $('#fruitForm').elements.scope.innerHTML = options(
+    Object.entries(DATA.scopes).map(([value, label]) => ({ value, label })), 'self'
+  );
   updateOnline();
-
-  window.addEventListener('hashchange', render);
-  window.addEventListener('storage', (e) => { if (e.key === STORE_KEY) { state = load(); render(); } });
+  lastRoute = location.hash;
   render();
 
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
-  }
-})();
+  // 別タブで変更されたら読み直す
+  window.addEventListener('storage', (e) => {
+    if (e.key === STORE_KEY) {
+      state = loadState();
+      render();
+    }
+  });
+}
+
+init();
+
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}

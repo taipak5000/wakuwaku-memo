@@ -16,7 +16,7 @@
     // 描画前にテーマ（ライト／ダーク）を確定させ、ちらつきを防ぐ
     (function () {
       try {
-        var t = localStorage.getItem('wakuwaku_theme');
+        var t = localStorage.getItem('wakuwaku-memo:theme');
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
       } catch (e) { /* 保存が使えない環境では端末の設定に従う */ }
     })();
