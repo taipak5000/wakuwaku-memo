@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>わくわく厳選メモ</title>
+  <meta name="description" content="モンストのわくわくの実を、パーティの種族・撃種・戦型の相性を見ながら厳選するためのメモ">
+  <meta name="theme-color" content="#1f6f5c" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#14211d" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="わくわくメモ">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="logo" aria-hidden="true"></span>
+      <h1 class="site-title">わくわく厳選メモ</h1>
+      <span id="offlineBadge" class="offline-badge" hidden>オフライン</span>
+    </div>
+  </header>
+
+  <main id="app" class="container" tabindex="-1"></main>
+
+  <nav class="tabbar" aria-label="メインメニュー">
+    <a href="#/parties" data-tab="parties"><span class="tab-ico" aria-hidden="true">◆</span>パーティ</a>
+    <a href="#/todo" data-tab="todo"><span class="tab-ico" aria-hidden="true">✓</span>やること</a>
+    <a href="#/chars" data-tab="chars"><span class="tab-ico" aria-hidden="true">●</span>キャラ</a>
+    <a href="#/fruits" data-tab="fruits"><span class="tab-ico" aria-hidden="true">✿</span>実の一覧</a>
+    <a href="#/data" data-tab="data"><span class="tab-ico" aria-hidden="true">⇅</span>データ</a>
+  </nav>
+
+  <!-- キャラ登録・編集 -->
+  <dialog id="charDialog" class="sheet">
+    <form method="dialog" id="charForm">
+      <h2 id="charDialogTitle">キャラを登録</h2>
+      <label class="field">
+        <span>キャラ名</span>
+        <input name="name" required maxlength="40" autocomplete="off" placeholder="例：ルシファー">
+      </label>
+      <label class="field">
+        <span>種族</span>
+        <input name="race" required maxlength="20" list="raceList" autocomplete="off" placeholder="候補から選ぶか入力">
+      </label>
+      <div class="field-row">
+        <label class="field">
+          <span>撃種</span>
+          <select name="hit" required></select>
+        </label>
+        <label class="field">
+          <span>戦型</span>
+          <select name="type" required></select>
+        </label>
+      </div>
+      <label class="field">
+        <span>メモ（任意）</span>
+        <textarea name="memo" rows="2" maxlength="300" placeholder="例：今ついている実、運極かどうか など"></textarea>
+      </label>
+      <input type="hidden" name="id">
+      <div class="dialog-actions">
+        <button type="button" class="btn ghost" data-action="close-dialog">やめる</button>
+        <button type="submit" class="btn primary" value="save">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 自分で追加する実 -->
+  <dialog id="fruitDialog" class="sheet">
+    <form method="dialog" id="fruitForm">
+      <h2 id="fruitDialogTitle">実を追加</h2>
+      <label class="field">
+        <span>実の名前</span>
+        <input name="name" required maxlength="30" autocomplete="off" placeholder="例：〇〇の力">
+      </label>
+      <label class="field">
+        <span>効く範囲</span>
+        <select name="scope" required></select>
+      </label>
+      <label class="field check">
+        <input type="checkbox" name="attack">
+        <span>攻撃力が上がる実（加撃系としてまとめて表示）</span>
+      </label>
+      <label class="field">
+        <span>効果メモ（任意）</span>
+        <input name="desc" maxlength="80" autocomplete="off">
+      </label>
+      <input type="hidden" name="id">
+      <div class="dialog-actions">
+        <button type="button" class="btn ghost" data-action="close-dialog">やめる</button>
+        <button type="submit" class="btn primary" value="save">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <datalist id="raceList"></datalist>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
