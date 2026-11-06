@@ -470,7 +470,7 @@
     document.getElementById('bankDialogTitle').textContent = b ? 'バンクの実を編集' : 'バンクに実を登録';
     bankForm.reset();
     bankForm.fruit.innerHTML = fruitOptions(b ? b.fruit : '', false);
-    bankForm.grade.innerHTML = gradeOptions(b ? b.grade : D.grades[3]);
+    bankForm.grade.innerHTML = gradeOptions(b ? b.grade : D.grades[0]);
     bankForm.id.value = b ? b.id : '';
     bankForm.count.value = b ? b.count : 1;
     bankForm.memo.value = b ? b.memo : '';

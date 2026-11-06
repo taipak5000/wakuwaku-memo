@@ -18,7 +18,7 @@ window.WAKU_DATA = {
   ],
 
   // 等級（低い順）。rank が大きいほど上の等級。
-  grades: ['初級', '中級', '上級', '特級', '特級L', 'EL'],
+  grades: ['特級L', 'EL'],
 
   // 効く範囲
   scopes: {
