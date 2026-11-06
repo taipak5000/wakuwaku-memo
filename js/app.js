@@ -800,6 +800,28 @@ function viewBank() {
 
 let charFilter = 'all';
 
+// 追加フォームの入力中の内容（再描画しても消えないように持っておく）
+const newDraft = () => ({ name: '', rows: [{ fruitId: '', target: DATA.grades[DATA.grades.length - 1] }] });
+let draft = newDraft();
+
+function addForm() {
+  const rows = draft.rows.map((r, n) => `
+    <div class="draft-row">
+      <select data-draft="fruitId" data-n="${n}" aria-label="ほしい実 ${n + 1}">${fruitOptions(r.fruitId, '— ほしい実 —')}</select>
+      <select data-draft="target" data-n="${n}" aria-label="目標の等級 ${n + 1}">${options(DATA.grades, r.target)}</select>
+      ${draft.rows.length > 1 ? `<button type="button" class="icon-btn" data-action="draft-remove" data-n="${n}" aria-label="この実を外す">×</button>` : ''}
+    </div>`).join('');
+  return `
+    <form class="add-char card" data-form="add-char" autocomplete="off">
+      <div class="add-row">
+        <input name="name" data-draft="name" value="${esc(draft.name)}" maxlength="40" placeholder="キャラ名" aria-label="キャラ名" required>
+        <button class="btn primary" type="submit">追加</button>
+      </div>
+      <div class="draft-rows">${rows}</div>
+      ${draft.rows.length < MAX_CHAR_PLANS ? '<button type="button" class="btn ghost draft-more" data-action="draft-add">＋ ほしい実をもう1つ</button>' : ''}
+    </form>`;
+}
+
 function starButton(c) {
   return `<button class="star${c.priority ? ' on' : ''}" data-action="toggle-priority" data-id="${esc(c.id)}"
     aria-pressed="${c.priority}" aria-label="${esc(c.name)}を優先にする" title="優先して厳選する">${c.priority ? '★' : '☆'}</button>`;
@@ -829,6 +851,7 @@ function viewChars() {
         <h3><a class="plain" href="#/char/${esc(c.id)}">${esc(c.name)}</a></h3>
         ${c.accountId ? `<span class="chip chip-account">${esc(accountName(c.accountId))}</span>` : ''}
         <a class="icon-btn" href="#/char/${esc(c.id)}" aria-label="${esc(c.name)}の詳細">›</a>
+        <button class="icon-btn danger" data-action="delete-char" data-id="${esc(c.id)}" aria-label="${esc(c.name)}を削除">🗑</button>
       </div>
       ${c.memo ? `<p class="char-memo">${esc(c.memo)}</p>` : ''}
       ${charPlans(c)}
@@ -837,10 +860,7 @@ function viewChars() {
   return `
     <section>
       <h2>キャラ</h2>
-      <form class="add-char card" data-form="add-char" autocomplete="off">
-        <input name="name" maxlength="40" placeholder="キャラ名を入れて追加" aria-label="キャラ名" required>
-        <button class="btn primary" type="submit">追加</button>
-      </form>
+      ${addForm()}
       ${state.accounts.length ? `
       <div class="seg wrap" role="group" aria-label="アカウントで絞り込む">
         ${[{ value: 'all', label: 'すべて' }].concat(accountChoices()).map((o) =>
@@ -1138,6 +1158,49 @@ function themeSetting() {
   }
 }
 
+/* ---------- 画面内の確認・入力（confirm / prompt の代わり） ---------- */
+
+let askResolve = null;
+
+// 確認なら true/false、input を渡すと入力した文字列（やめたら false）を返す
+function ask({ title, text = '', ok = 'OK', danger = false, input = null }) {
+  if (askResolve) askResolve(false);
+  const form = $('#askForm');
+  form.reset();
+  $('#askTitle').textContent = title;
+  $('#askText').textContent = text;
+  $('#askText').hidden = !text;
+  $('#askInputField').hidden = !input;
+  $('#askInputLabel').textContent = input || '';
+  const okBtn = $('#askOk');
+  okBtn.textContent = ok;
+  okBtn.className = `btn ${danger ? 'danger-solid' : 'primary'}`;
+  return new Promise((resolve) => {
+    askResolve = resolve;
+    $('#askDialog').showModal();
+    if (input) setTimeout(() => form.elements.value.focus(), 50);
+  });
+}
+
+$('#askForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const input = !$('#askInputField').hidden;
+  const value = input ? e.target.elements.value.value.trim() : true;
+  if (input && !value) return;
+  const resolve = askResolve;
+  askResolve = null;
+  closeSheet($('#askDialog'));
+  resolve?.(value);
+});
+
+// 「やめる」・背景タップ・Esc で閉じたときは false
+$('#askDialog').addEventListener('close', () => {
+  if (askResolve) {
+    askResolve(false);
+    askResolve = null;
+  }
+});
+
 /* ---------- 操作 ---------- */
 
 function setPlan(party, i, k, key, value) {
@@ -1153,10 +1216,10 @@ function setCharPlan(c, k, key, value) {
   save();
 }
 
-function addChar(name) {
+function addChar(name, plans = [emptyPlan()]) {
   const c = {
     id: uid(), name: name.slice(0, 40), race: '', hit: '', type: '', memo: '',
-    accountId: defaultAccount(), priority: false, plans: [emptyPlan()]
+    accountId: defaultAccount(), priority: false, plans
   };
   state.characters.push(c);
   save();
@@ -1197,22 +1260,26 @@ const actions = {
     location.hash = `#/party/${copy.id}`;
     toast('パーティを複製しました');
   },
-  'delete-party'(el) {
+  async 'delete-party'(el) {
     const p = partyById(el.dataset.id);
-    if (!p || !confirm(`「${p.name}」を削除しますか？`)) return;
+    if (!p || !await ask({ title: `「${p.name}」を削除しますか？`, ok: '削除する', danger: true })) return;
     state.parties = state.parties.filter((x) => x !== p);
     save();
     location.hash = '#/parties';
     toast('パーティを削除しました');
   },
-  'delete-char'(el) {
+  async 'delete-char'(el) {
     const c = charById(el.dataset.id);
     if (!c) return;
     const used = state.parties.filter((p) => p.members.some((m) => m.charId === c.id));
-    const msg = used.length
-      ? `「${c.name}」を削除しますか？\n${used.length}個のパーティから外れ、その枠の実のメモも消えます。`
-      : `「${c.name}」を削除しますか？`;
-    if (!confirm(msg)) return;
+    const ok = await ask({
+      title: `「${c.name}」を削除しますか？`,
+      text: `狙う実のメモも消えます。${used.length ? `${used.length}個のパーティからも外れます。` : ''}`,
+      ok: '削除する',
+      danger: true
+    });
+    if (!ok || !charById(c.id)) return;
+    const before = JSON.stringify(state);
     for (const p of used) {
       for (const m of p.members) {
         if (m.charId === c.id) {
@@ -1225,7 +1292,21 @@ const actions = {
     save();
     if (currentRoute().name === 'char') location.hash = '#/chars';
     else render();
-    toast(`${c.name}を削除しました`);
+    toast(`${c.name}を削除しました`, () => {
+      state = normalize(JSON.parse(before));
+      save();
+      render();
+    });
+  },
+  'draft-add'() {
+    if (draft.rows.length >= MAX_CHAR_PLANS) return;
+    draft.rows.push({ fruitId: '', target: DATA.grades[DATA.grades.length - 1] });
+    render();
+    $(`[data-draft="fruitId"][data-n="${draft.rows.length - 1}"]`)?.focus();
+  },
+  'draft-remove'(el) {
+    draft.rows.splice(Number(el.dataset.n), 1);
+    render();
   },
   'toggle-priority'(el) {
     const c = charById(el.dataset.id);
@@ -1296,9 +1377,14 @@ const actions = {
   'edit-account'(el) {
     openAccountDialog(accountById(el.dataset.id));
   },
-  'delete-account'(el) {
+  async 'delete-account'(el) {
     const a = accountById(el.dataset.id);
-    if (!a || !confirm(`「${a.name}」を削除しますか？\nこのアカウントのキャラとバンクの実は「メイン」に移ります。`)) return;
+    if (!a || !await ask({
+      title: `「${a.name}」を削除しますか？`,
+      text: 'このアカウントのキャラとバンクの実は「メイン」に移ります。',
+      ok: '削除する',
+      danger: true
+    })) return;
     state.accounts = state.accounts.filter((x) => x !== a);
     for (const c of state.characters) if (c.accountId === a.id) c.accountId = '';
     for (const b of state.bank) if (b.accountId === a.id) b.accountId = '';
@@ -1337,8 +1423,13 @@ const actions = {
   import() {
     $('#importFile')?.click();
   },
-  reset() {
-    if (!confirm('すべてのデータを消します。元に戻せません。よろしいですか？')) return;
+  async reset() {
+    if (!await ask({
+      title: 'すべてのデータを消しますか？',
+      text: '元に戻せません。先にファイルへ書き出しておくと安心です。',
+      ok: 'すべて消す',
+      danger: true
+    })) return;
     state = defaultState();
     save();
     render();
@@ -1366,22 +1457,36 @@ document.addEventListener('change', (e) => {
     const file = el.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
+      let next;
       try {
         const raw = JSON.parse(String(reader.result));
         if (!Array.isArray(raw.characters) || !Array.isArray(raw.parties)) throw new Error('format');
-        const next = normalize(raw);
-        if (!confirm(`キャラ ${next.characters.length} 体・パーティ ${next.parties.length} 個を読み込みます。\n今のデータは置き換わります。よろしいですか？`)) return;
+        next = normalize(raw);
+      } catch (err) {
+        toast('このファイルは読み込めませんでした');
+        return;
+      }
+      if (!await ask({
+        title: 'ファイルを読み込みますか？',
+        text: `キャラ ${next.characters.length} 体・パーティ ${next.parties.length} 個を読み込みます。今のデータは置き換わります。`,
+        ok: '読み込む'
+      })) return;
+      {
         state = next;
         save();
         render();
         toast('読み込みました');
-      } catch (err) {
-        toast('このファイルは読み込めませんでした');
       }
     };
     reader.readAsText(file);
     el.value = '';
+    return;
+  }
+
+  if (el.dataset.draft && el.dataset.draft !== 'name') {
+    const row = draft.rows[Number(el.dataset.n)];
+    if (row) row[el.dataset.draft] = el.value;
     return;
   }
 
@@ -1393,13 +1498,13 @@ document.addEventListener('change', (e) => {
     if (!party) return;
     if (el.value === '__new') {
       el.value = party.members[i].charId || '';
-      const nm = (prompt('キャラ名') || '').trim();
-      if (!nm) return;
-      const c = addChar(nm);
-      c.plans = [];
-      party.members[i].charId = c.id;
-      touch(party);
-      render();
+      ask({ title: '新しいキャラを登録', input: 'キャラ名', ok: '登録する' }).then((nm) => {
+        if (!nm) return;
+        const c = addChar(nm, []);
+        party.members[i].charId = c.id;
+        touch(party);
+        render();
+      });
       return;
     }
     // キャラを入れ替えても実のメモは引き継ぐ。枠を空にしたときだけ消す
@@ -1453,6 +1558,10 @@ document.addEventListener('change', (e) => {
 
 document.addEventListener('input', (e) => {
   const el = e.target;
+  if (el.dataset.draft === 'name') {
+    draft.name = el.value;
+    return;
+  }
   if (el.dataset.charField && el.tagName !== 'SELECT') {
     const c = charById(el.dataset.id);
     if (!c) return;
@@ -1475,10 +1584,13 @@ document.addEventListener('submit', (e) => {
   e.preventDefault();
   const name = e.target.elements.name.value.trim();
   if (!name) return;
-  const c = addChar(name);
+  const picked = draft.rows.filter((r) => r.fruitId)
+    .map((r) => ({ ...emptyPlan(), fruitId: r.fruitId, target: r.target }));
+  const c = addChar(name, picked.length ? picked : [emptyPlan()]);
+  draft = newDraft();
   render();
-  $(`[data-fk="cplan-${CSS.escape(c.id)}-0-fruit"]`)?.focus();
-  toast(`${c.name}を追加しました`);
+  $('[data-form="add-char"] input[name="name"]')?.focus();
+  toast(picked.length ? `${c.name}を追加しました（実 ${picked.length} つ）` : `${c.name}を追加しました`);
 });
 
 // ダイアログの外側（背景）をタップしたら閉じる
