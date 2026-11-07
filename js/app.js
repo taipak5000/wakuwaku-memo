@@ -82,6 +82,8 @@ function normalize(raw) {
       memo: String(c.memo ?? '').slice(0, 300),
       accountId: accountOk(c.accountId),
       priority: !!c.priority,
+      element: DATA.elements.includes(c.element) ? c.element : '', // 属性
+      count: Math.min(99, Math.max(1, Math.floor(Number(c.count)) || 1)), // 持っている数
       done: !!c.done, // 厳選完了
       doneAt: Number(c.doneAt) || 0,
       // パーティに入れずに、キャラ単体で狙う実
@@ -420,13 +422,47 @@ async function moveAllFromBank(c) {
 
 /* ---------- 表示部品 ---------- */
 
+const elementCls = (e) => ({ 火: 'el-fire', 水: 'el-water', 木: 'el-wood', 光: 'el-light', 闇: 'el-dark' }[e] || '');
+const hitCls = (h) => (h === '反射' ? 'hit-ref' : h === '貫通' ? 'hit-pen' : '');
+
 function chips(c) {
   if (!c) return '';
-  const hitCls = c.hit === '反射' ? 'chip-hit-ref' : 'chip-hit-pen';
-  return (c.race ? `<span class="chip chip-race">${esc(c.race)}</span>` : '')
-    + (c.hit ? `<span class="chip ${hitCls}">${esc(c.hit)}</span>` : '')
+  return (c.element ? `<span class="chip el ${elementCls(c.element)}">${esc(c.element)}</span>` : '')
+    + (c.count > 1 ? `<span class="chip chip-count">×${c.count}</span>` : '')
+    + (c.race ? `<span class="chip chip-race">${esc(c.race)}</span>` : '')
+    + (c.hit ? `<span class="chip ${hitCls(c.hit)}">${esc(c.hit)}</span>` : '')
     + (c.type ? `<span class="chip chip-type">${esc(c.type)}</span>` : '')
     + (c.accountId ? `<span class="chip chip-account">${esc(accountName(c.accountId))}</span>` : '');
+}
+
+let raceOpen = ''; // 種族の候補を開いているキャラ
+
+// タップするたびに切り替わるボタン。属性→撃種→戦型→超→種族→持っている数
+function attrEditor(c) {
+  const base = normType(c.type);
+  const isSuper = /^超/.test(c.type || '');
+  const btn = (k, label, cls, title) =>
+    `<button type="button" class="ac ${cls}${label ? '' : ' unset'}" data-action="cycle-attr" data-id="${esc(c.id)}" data-k="${k}" title="${title}">${esc(label || title)}</button>`;
+  return `
+    <div class="attr-editor">
+      ${btn('element', c.element, `el ${elementCls(c.element)}`, '属性')}
+      ${btn('hit', c.hit, hitCls(c.hit), '撃種')}
+      ${btn('type', base.replace(/型$/, ''), 'type', '戦型')}
+      ${base ? `<button type="button" class="ac super${isSuper ? ' on' : ''}" data-action="cycle-attr" data-id="${esc(c.id)}" data-k="super" aria-pressed="${isSuper}" title="超戦型">超</button>` : ''}
+      <button type="button" class="ac race${c.race ? '' : ' unset'}${raceOpen === c.id ? ' open' : ''}" data-action="race-open" data-id="${esc(c.id)}" title="種族">${esc(c.race || '種族')}</button>
+      <span class="ac-count" title="持っている数">
+        <button type="button" data-action="char-count" data-id="${esc(c.id)}" data-d="-1" aria-label="${esc(c.name)}を1体減らす"${c.count <= 1 ? ' disabled' : ''}>−</button>
+        <b>×${c.count}</b>
+        <button type="button" data-action="char-count" data-id="${esc(c.id)}" data-d="1" aria-label="${esc(c.name)}を1体増やす">＋</button>
+      </span>
+    </div>
+    ${raceOpen === c.id ? `
+    <div class="race-panel">
+      ${[...new Set(DATA.races.concat(state.characters.map((x) => x.race).filter(Boolean)))].map((r) =>
+        `<button type="button" class="pick${r === c.race ? ' on' : ''}" data-action="set-race" data-id="${esc(c.id)}" data-value="${esc(r)}">${esc(r)}</button>`).join('')}
+      <button type="button" class="pick" data-action="set-race-other" data-id="${esc(c.id)}">その他…</button>
+      ${c.race ? `<button type="button" class="pick" data-action="set-race" data-id="${esc(c.id)}" data-value="">外す</button>` : ''}
+    </div>` : ''}`;
 }
 
 function options(list, selected, placeholder) {
@@ -520,21 +556,34 @@ function viewParties() {
   const list = [...state.parties].sort((a, b) => b.updatedAt - a.updatedAt);
   const doneChars = state.characters.filter((c) => c.done).sort((x, y) => x.name.localeCompare(y.name, 'ja'));
   partyPick = partyPick.filter((id) => doneChars.some((c) => c.id === id));
-  const doneBox = doneChars.length ? `
-      <div class="card">
-        <h3 class="card-title">厳選完了のキャラで編成する<small>タップして選び、まとめてパーティにできます（4体まで）。</small></h3>
-        <div class="pick-list">
+  const totalOwned = doneChars.reduce((n, c) => n + c.count, 0);
+  const doneBox = `
+      <div class="card owned">
+        <h3 class="card-title">持っているキャラ（厳選完了）<small>${doneChars.length ? `${doneChars.length}種類・${totalOwned}体。` : ''}ボタンをタップすると属性・撃種・戦型などが切り替わります。名前の左の丸で選ぶと、まとめてパーティにできます（4体まで）。</small></h3>
+        <form class="add-row owned-add" data-form="add-owned" autocomplete="off">
+          <input name="name" maxlength="40" placeholder="厳選が終わっているキャラの名前" aria-label="キャラ名" required>
+          <button class="btn primary" type="submit">登録</button>
+        </form>
+        ${doneChars.length ? `<ul class="owned-list">
           ${doneChars.map((c) => {
             const n = partyPick.indexOf(c.id);
-            return `<button type="button" class="pick${n >= 0 ? ' on' : ''}" data-action="party-pick" data-id="${esc(c.id)}"
-              aria-pressed="${n >= 0}"${n < 0 && partyPick.length >= PARTY_SIZE ? ' disabled' : ''}>${n >= 0 ? `<b>${n + 1}</b>` : ''}${esc(c.name)}</button>`;
+            return `
+            <li class="${n >= 0 ? 'picked' : ''}">
+              <div class="owned-head">
+                <button type="button" class="pick-dot${n >= 0 ? ' on' : ''}" data-action="party-pick" data-id="${esc(c.id)}"
+                  aria-pressed="${n >= 0}" aria-label="${esc(c.name)}をパーティに選ぶ"${n < 0 && partyPick.length >= PARTY_SIZE ? ' disabled' : ''}>${n >= 0 ? n + 1 : ''}</button>
+                <a class="plain owned-name" href="#/char/${esc(c.id)}">${esc(c.name)}</a>
+                ${c.accountId ? `<span class="chip chip-account">${esc(accountName(c.accountId))}</span>` : ''}
+              </div>
+              ${attrEditor(c)}
+            </li>`;
           }).join('')}
-        </div>
+        </ul>` : '<p class="muted">まだいません。キャラの画面で「✓ 厳選完了」にしたキャラも、ここに並びます。</p>'}
         ${partyPick.length ? `<div class="row-actions pick-actions">
           <button class="btn primary" data-action="party-from-pick">この${partyPick.length}体でパーティを作る</button>
           <button class="btn ghost" data-action="party-pick-clear">選び直す</button>
         </div>` : ''}
-      </div>` : '';
+      </div>`;
   const cards = list.map((p) => {
     const pr = progressOf(p);
     const names = p.members.map((m) => charById(m.charId)?.name).filter(Boolean);
@@ -581,18 +630,25 @@ function viewParty(id) {
     const entries = Object.entries(a.groups[scope]).sort((x, y) => y[1].length - x[1].length);
     if (!entries.length) return '';
     return `<div class="synergy-row"><span class="synergy-label">${label}</span><div class="synergy-chips">`
-      + entries.map(([v, idx]) => `<span class="count-chip${idx.length >= 2 ? ' shared' : ''}">${esc(v)}<b>×${idx.length}</b></span>`).join('')
+      + entries.map(([v, idx]) => `<span class="count-chip${scope === 'hit' ? ` ${hitCls(v)}` : idx.length >= 2 ? ' shared' : ''}">${esc(v)}<b>×${idx.length}</b></span>`).join('')
       + '</div></div>';
   };
 
   const synergy = a.memberCount ? `
       <div class="synergy">
+        ${(() => {
+          const els = {};
+          a.chars.forEach((c) => { if (c?.element) els[c.element] = (els[c.element] || 0) + 1; });
+          const list = Object.entries(els);
+          return list.length ? `<div class="synergy-row"><span class="synergy-label">属性</span><div class="synergy-chips">${list.map(([e, n]) =>
+            `<span class="count-chip el ${elementCls(e)}">${esc(e)}<b>×${n}</b></span>`).join('')}</div></div>` : '';
+        })()}
         ${groupRow('race', '種族')}
         ${groupRow('hit', '撃種')}
         ${groupRow('type', '戦型')}
       </div>
       ${hints.length ? `<ul class="hints">${hints.map((h) => `<li class="hint-${h.level}">${esc(h.text)}</li>`).join('')}</ul>` : ''}`
-    : '<p class="muted">下の枠にキャラを入れると、種族・撃種・戦型の重なりがここに出ます。</p>';
+    : '<p class="muted">下の枠にキャラを入れると、属性・種族・撃種・戦型の重なりがここに出ます。各キャラのボタンをタップすると切り替えられます。</p>';
 
   const charLabel = (c) => {
     const attrs = [c.race, c.hit, normType(c.type)].filter(Boolean).join('/');
@@ -656,7 +712,7 @@ function viewParty(id) {
           </select>
           ${c ? `<a class="icon-btn" href="#/char/${esc(c.id)}" aria-label="${esc(c.name)}を開く">✎</a>` : ''}
         </div>
-        ${c ? `<div class="chips">${chips(c)}</div>${c.race && c.hit && c.type ? '' : `<p class="muted small">種族・撃種・戦型を<a href="#/char/${esc(c.id)}">キャラの画面</a>で入れると、相性を判定できます。</p>`}${c.memo ? `<p class="char-memo">${esc(c.memo)}</p>` : ''}` : ''}
+        ${c ? `${attrEditor(c)}${c.memo ? `<p class="char-memo">${esc(c.memo)}</p>` : ''}` : ''}
         ${reachRow}
         ${c ? `<div class="plans">${rows}</div>` : ''}
       </article>`;
@@ -1010,20 +1066,10 @@ function viewChar(id) {
         ${bankBox(c)}
       </div>
 
-      <details class="card attrs"${hasAttrs ? ' open' : ''}>
-        <summary>種族・撃種・戦型（パーティで使うときだけ）</summary>
-        <p class="muted">パーティに入れたとき、絆の実が何体に届くかの判定に使います。厳選のメモだけなら空欄のままで大丈夫です。</p>
-        <label class="field">
-          <span>種族</span>
-          <input data-char-field="race" data-id="${esc(c.id)}" value="${esc(c.race)}" maxlength="20" list="raceList" autocomplete="off" placeholder="候補から選ぶか入力">
-        </label>
-        <div class="field-row">
-          <label class="field"><span>撃種</span>
-            <select data-char-field="hit" data-id="${esc(c.id)}">${options(DATA.hits, c.hit, '未設定')}</select></label>
-          <label class="field"><span>戦型</span>
-            <select data-char-field="type" data-id="${esc(c.id)}">${options(DATA.types, c.type, '未設定')}</select></label>
-        </div>
-      </details>
+      <div class="card">
+        <h3 class="card-title">属性・撃種・戦型・種族・持っている数<small>タップすると切り替わります。パーティでの相性の判定に使います。</small></h3>
+        ${attrEditor(c)}
+      </div>
 
       ${inParties.length ? `
       <div class="card">
@@ -1451,7 +1497,7 @@ function completeChar(c) {
 
 function addChar(name, plans = []) {
   const c = {
-    id: uid(), name: name.slice(0, 40), race: '', hit: '', type: '', memo: '',
+    id: uid(), name: name.slice(0, 40), race: '', hit: '', type: '', memo: '', element: '', count: 1,
     accountId: defaultAccount(), priority: false, plans
   };
   state.characters.push(c);
@@ -1588,6 +1634,51 @@ const actions = {
   },
   'draft-remove'(el) {
     draft.rows.splice(Number(el.dataset.n), 1);
+    render();
+  },
+  'cycle-attr'(el) {
+    const c = charById(el.dataset.id);
+    if (!c) return;
+    const next = (list, v) => list[(list.indexOf(v) + 1) % list.length];
+    const k = el.dataset.k;
+    if (k === 'element') c.element = next(['', ...DATA.elements], c.element);
+    if (k === 'hit') c.hit = next(['', ...DATA.hits], c.hit);
+    if (k === 'type') {
+      const sup = /^超/.test(c.type || '');
+      const base = next(['', ...DATA.baseTypes], normType(c.type));
+      c.type = base ? (sup ? `超${base}` : base) : '';
+    }
+    if (k === 'super' && c.type) c.type = /^超/.test(c.type) ? normType(c.type) : `超${c.type}`;
+    save();
+    render();
+  },
+  'race-open'(el) {
+    raceOpen = raceOpen === el.dataset.id ? '' : el.dataset.id;
+    render();
+  },
+  'set-race'(el) {
+    const c = charById(el.dataset.id);
+    if (!c) return;
+    c.race = el.dataset.value;
+    raceOpen = '';
+    save();
+    render();
+  },
+  async 'set-race-other'(el) {
+    const c = charById(el.dataset.id);
+    if (!c) return;
+    const v = await ask({ title: '種族を入力', input: '種族', ok: '決める' });
+    if (!v || !charById(c.id)) return;
+    c.race = v.slice(0, 20);
+    raceOpen = '';
+    save();
+    render();
+  },
+  'char-count'(el) {
+    const c = charById(el.dataset.id);
+    if (!c) return;
+    c.count = Math.min(99, Math.max(1, c.count + Number(el.dataset.d)));
+    save();
     render();
   },
   'complete-char'(el) {
@@ -1910,6 +2001,21 @@ document.addEventListener('input', (e) => {
   if (!party) return;
   party[el.dataset.partyField] = el.value;
   touch(party);
+});
+
+// パーティ画面：厳選が終わっている持ちキャラを登録する
+document.addEventListener('submit', (e) => {
+  if (e.target.dataset.form !== 'add-owned') return;
+  e.preventDefault();
+  const name = e.target.elements.name.value.trim();
+  if (!name) return;
+  const c = addChar(name, []);
+  c.done = true;
+  c.doneAt = Date.now();
+  save();
+  render();
+  $('[data-form="add-owned"] input[name="name"]')?.focus();
+  toast(`${c.name}を登録しました。ボタンで属性などを切り替えられます`);
 });
 
 // キャラを名前だけで追加する
