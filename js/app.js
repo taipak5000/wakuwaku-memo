@@ -650,86 +650,6 @@ function viewParty(id) {
     </section>`;
 }
 
-/* ---------- 画面：やること（キャラ別の厳選リスト） ---------- */
-
-let todoFilter = 'open';
-
-function viewTodo() {
-  const byChar = new Map();
-  forEachPlan((c, p, ref) => {
-    if (!p.fruitId) return;
-    if (todoFilter === 'open' && p.status === 'done') return;
-    const f = fruitById(p.fruitId);
-    if (!f) return;
-    if (!byChar.has(c.id)) byChar.set(c.id, { c, rows: [] });
-    byChar.get(c.id).rows.push({ ref, p, f });
-  });
-
-  const order = { doing: 0, todo: 1, compromise: 2, done: 3 };
-  const groups = [...byChar.values()].sort((x, y) => {
-    const dx = x.rows.some((r) => r.p.status === 'doing') ? 0 : 1;
-    const dy = y.rows.some((r) => r.p.status === 'doing') ? 0 : 1;
-    return dx - dy || x.c.name.localeCompare(y.c.name, 'ja');
-  });
-  const prioritized = groups.filter((g) => g.c.priority);
-  const others = groups.filter((g) => !g.c.priority);
-
-  const card = ({ c, rows }) => {
-    rows.sort((x, y) => order[x.p.status] - order[y.p.status]);
-    return `
-      <article class="card todo-card${c.priority ? ' is-priority' : ''}">
-        <div class="todo-head">
-          ${starButton(c)}
-          <h3><a class="plain" href="#/char/${esc(c.id)}">${esc(c.name)}</a></h3>
-          <div class="chips">${chips(c)}</div>
-        </div>
-        <ul class="todo-list">
-          ${rows.map((r) => `
-            <li class="todo-row status-${esc(r.p.status)}">
-              <div class="todo-main">
-                <b>${esc(r.f.short)}</b>
-                <span class="grade">${esc(r.p.current || 'なし')} → ${esc(r.p.target || '未設定')}</span>
-                ${r.p.status !== 'done' && bankCovers(c, r.p.fruitId, r.p.target) ? '<a class="badge in-bank" href="#/bank">バンクにあり</a>' : ''}
-              </div>
-              <div class="todo-sub">
-                ${sourceLink(r.ref)}
-                <select ${r.ref.party
-                  ? `data-todo="${esc(r.ref.party.id)}" data-slot="${r.ref.i}"`
-                  : `data-todo-char="${esc(r.ref.char.id)}"`} data-k="${r.ref.k}" aria-label="状態">
-                  ${options(DATA.statuses.map((s) => ({ value: s.id, label: s.label })), r.p.status)}
-                </select>
-              </div>
-            </li>`).join('')}
-        </ul>
-      </article>`;
-  };
-
-  // 優先にしたのに、未完了の実が無いキャラ
-  const idle = state.characters.filter((c) => c.priority && !byChar.has(c.id));
-
-  return `
-    <section>
-      <div class="section-head">
-        <h2>やること</h2>
-        <div class="seg" role="group" aria-label="表示する範囲">
-          <button class="${todoFilter === 'open' ? 'on' : ''}" data-action="todo-filter" data-value="open">未完了</button>
-          <button class="${todoFilter === 'all' ? 'on' : ''}" data-action="todo-filter" data-value="all">すべて</button>
-        </div>
-      </div>
-      <p class="muted lead">英雄の神殿でリーダーにするキャラごとに、狙っている実をまとめています。☆を押したキャラは「優先」として上にまとまります。</p>
-      ${groups.length || idle.length ? `
-        <h3 class="group-title">★ 優先して厳選する</h3>
-        ${prioritized.length ? `<div class="stack">${prioritized.map(card).join('')}</div>`
-          : '<p class="muted">まだありません。下のキャラの☆を押すと、ここに移ります。</p>'}
-        ${idle.length ? `<p class="muted small">優先にしているが、${todoFilter === 'open' ? '未完了の' : ''}実が無いキャラ：${idle.map((c) => `<a href="#/char/${esc(c.id)}">${esc(c.name)}</a>`).join('、')}</p>` : ''}
-        ${others.length ? `<h3 class="group-title">そのほか</h3><div class="stack">${others.map(card).join('')}</div>` : ''}`
-      : emptyBox(
-        todoFilter === 'open' ? '未完了の厳選はありません。' : 'まだ狙う実が登録されていません。',
-        '<a class="btn primary" href="#/chars">キャラに狙う実をメモする</a>'
-      )}
-    </section>`;
-}
-
 /* ---------- 画面：わくわくバンク ---------- */
 
 function viewBank() {
@@ -853,37 +773,95 @@ function charPlans(c) {
       ? `<button class="btn add-plan" data-action="pick-cplan" data-id="${esc(c.id)}">＋ 狙う実を追加（まとめて選べます）</button>` : ''}`;
 }
 
+let charShow = 'all'; // 'all' | 'open'（未完了だけ）
+
+// 狙う実1つ分の行（やること形式）。キャラ単体の実もパーティの枠の実も同じ形で出す
+function fruitLine(c, ref, p, f) {
+  const bind = ref.party
+    ? `data-rparty="${esc(ref.party.id)}" data-slot="${ref.i}" data-k="${ref.k}"`
+    : `data-rchar="${esc(ref.char.id)}" data-k="${ref.k}"`;
+  return `
+    <li class="todo-row status-${esc(p.status)}">
+      <div class="todo-main">
+        <b>${esc(f.short)}</b>
+        ${p.status !== 'done' && bankCovers(c, p.fruitId, p.target) ? '<a class="badge in-bank" href="#/bank">バンクにあり</a>' : ''}
+        ${ref.party ? `<span class="row-source">${sourceLink(ref)}</span>` : ''}
+        ${ref.party ? '' : `<button class="row-remove" data-action="remove-cplan" data-id="${esc(c.id)}" data-k="${ref.k}" aria-label="${esc(f.short)}を消す">×</button>`}
+      </div>
+      <div class="todo-sub">
+        <span class="grade-edit">
+          <select data-rk="current" ${bind} aria-label="今の等級">${options(DATA.grades, p.current, 'なし')}</select>
+          <span aria-hidden="true">→</span>
+          <select data-rk="target" ${bind} aria-label="目標の等級">${options(DATA.grades, p.target, '未設定')}</select>
+        </span>
+        <select data-rk="status" ${bind} aria-label="状態">${options(DATA.statuses.map((x) => ({ value: x.id, label: x.label })), p.status)}</select>
+      </div>
+    </li>`;
+}
+
 function viewChars() {
   if (charFilter !== 'all' && charFilter !== '' && !accountById(charFilter)) charFilter = 'all';
-  const list = [...state.characters]
-    .filter((c) => charFilter === 'all' || c.accountId === charFilter)
-    .sort((x, y) => (y.priority - x.priority) || x.name.localeCompare(y.name, 'ja'));
+  const order = { doing: 0, todo: 1, compromise: 2, done: 3 };
 
-  const items = list.map((c) => `
-    <article class="card char-card${c.priority ? ' is-priority' : ''}">
-      <div class="char-card-head">
+  // キャラごとに、キャラ単体の実とパーティの枠の実を集める
+  const rowsOf = new Map(state.characters.map((c) => [c.id, []]));
+  forEachPlan((c, p, ref) => {
+    const f = p.fruitId ? fruitById(p.fruitId) : null;
+    if (!f) return;
+    if (charShow === 'open' && p.status === 'done') return;
+    rowsOf.get(c.id)?.push({ ref, p, f });
+  });
+  const groups = state.characters
+    .filter((c) => charFilter === 'all' || c.accountId === charFilter)
+    .map((c) => ({ c, rows: rowsOf.get(c.id).sort((x, y) => order[x.p.status] - order[y.p.status]) }))
+    .sort((x, y) => {
+      const dx = x.rows.some((r) => r.p.status === 'doing') ? 0 : 1;
+      const dy = y.rows.some((r) => r.p.status === 'doing') ? 0 : 1;
+      return dx - dy || x.c.name.localeCompare(y.c.name, 'ja');
+    });
+  const prioritized = groups.filter((g) => g.c.priority);
+  const others = groups.filter((g) => !g.c.priority);
+
+  const card = ({ c, rows }) => `
+    <article class="card todo-card${c.priority ? ' is-priority' : ''}">
+      <div class="todo-head">
         ${starButton(c)}
         <h3><a class="plain" href="#/char/${esc(c.id)}">${esc(c.name)}</a></h3>
-        ${c.accountId ? `<span class="chip chip-account">${esc(accountName(c.accountId))}</span>` : ''}
-        <a class="icon-btn" href="#/char/${esc(c.id)}" aria-label="${esc(c.name)}の詳細">›</a>
-        <button class="icon-btn danger" data-action="delete-char" data-id="${esc(c.id)}" aria-label="${esc(c.name)}を削除">🗑</button>
+        <div class="chips">${chips(c)}</div>
+        <span class="head-actions">
+          <a class="icon-btn" href="#/char/${esc(c.id)}" aria-label="${esc(c.name)}の詳細">›</a>
+          <button class="icon-btn danger" data-action="delete-char" data-id="${esc(c.id)}" aria-label="${esc(c.name)}を削除">🗑</button>
+        </span>
       </div>
       ${c.memo ? `<p class="char-memo">${esc(c.memo)}</p>` : ''}
-      ${charPlans(c)}
-    </article>`).join('');
+      ${rows.length ? `<ul class="todo-list">${rows.map((r) => fruitLine(c, r.ref, r.p, r.f)).join('')}</ul>`
+        : `<p class="muted small">${charShow === 'open' && c.plans.some((p) => p.fruitId) ? '未完了の実はありません。' : '狙う実はまだありません。'}</p>`}
+      ${c.plans.filter((p) => p.fruitId).length < MAX_CHAR_PLANS
+        ? `<button class="btn add-plan" data-action="pick-cplan" data-id="${esc(c.id)}">＋ 狙う実を追加</button>` : ''}
+    </article>`;
 
   return `
     <section>
-      <h2>キャラ</h2>
+      <div class="section-head">
+        <h2>キャラ</h2>
+        <div class="seg" role="group" aria-label="表示する実">
+          <button class="${charShow === 'all' ? 'on' : ''}" data-action="char-show" data-value="all">すべて</button>
+          <button class="${charShow === 'open' ? 'on' : ''}" data-action="char-show" data-value="open">未完了</button>
+        </div>
+      </div>
       ${addForm()}
       ${state.accounts.length ? `
       <div class="seg wrap" role="group" aria-label="アカウントで絞り込む">
         ${[{ value: 'all', label: 'すべて' }].concat(accountChoices()).map((o) =>
           `<button class="${charFilter === o.value ? 'on' : ''}" data-action="char-filter" data-value="${esc(o.value)}">${esc(o.label)}</button>`).join('')}
       </div>` : ''}
-      ${list.length ? `<div class="stack">${items}</div>` : state.characters.length
-        ? '<p class="muted">このアカウントのキャラはまだいません。</p>'
-        : emptyBox('キャラ名を入れて追加し、厳選したい実を選んでいきます。種族などの情報は要りません。')}
+      ${groups.length ? `
+        ${prioritized.length ? `<h3 class="group-title">★ 優先して厳選する</h3><div class="stack">${prioritized.map(card).join('')}</div>` : ''}
+        ${others.length ? `${prioritized.length ? '<h3 class="group-title">そのほか</h3>' : '<p class="muted small hint">☆を押したキャラは「優先」として上にまとまります。</p>'}
+          <div class="stack">${others.map(card).join('')}</div>` : ''}`
+        : state.characters.length
+          ? '<p class="muted">このアカウントのキャラはまだいません。</p>'
+          : emptyBox('キャラ名を入れて追加し、厳選したい実を選んでいきます。種族などの情報は要りません。')}
 
       <div class="card accounts-card">
         <div class="section-head tight">
@@ -1089,7 +1067,7 @@ function render() {
     parties: viewParties,
     party: () => viewParty(id),
     char: () => viewChar(id),
-    todo: viewTodo,
+    todo: viewChars,
     bank: viewBank,
     chars: viewChars,
     fruits: viewFruitPicker,
@@ -1098,7 +1076,7 @@ function render() {
   const app = $('#app');
   app.innerHTML = (views[name] || viewChars)();
 
-  const tab = { party: 'parties', char: 'chars', fruits: 'data' }[name] || name;
+  const tab = { party: 'parties', char: 'chars', todo: 'chars', fruits: 'data' }[name] || name;
   $$('.tabbar a').forEach((a) => {
     const on = a.dataset.tab === tab;
     a.classList.toggle('active', on);
@@ -1364,7 +1342,7 @@ function setFruitsHidden(ids, hidden) {
   render();
 }
 
-function addChar(name, plans = [emptyPlan()]) {
+function addChar(name, plans = []) {
   const c = {
     id: uid(), name: name.slice(0, 40), race: '', hit: '', type: '', memo: '',
     accountId: defaultAccount(), priority: false, plans
@@ -1585,8 +1563,8 @@ const actions = {
     charFilter = el.dataset.value;
     render();
   },
-  'todo-filter'(el) {
-    todoFilter = el.dataset.value;
+  'char-show'(el) {
+    charShow = el.dataset.value === 'open' ? 'open' : 'all';
     render();
   },
   'slot-count'(el) {
@@ -1734,18 +1712,15 @@ document.addEventListener('change', (e) => {
     return;
   }
 
-  if (el.dataset.todo) {
-    const party = partyById(el.dataset.todo);
-    if (!party) return;
-    setPlan(party, Number(el.dataset.slot), Number(el.dataset.k), 'status', el.value);
-    render();
-    return;
-  }
-
-  if (el.dataset.todoChar) {
-    const c = charById(el.dataset.todoChar);
-    if (!c) return;
-    setCharPlan(c, Number(el.dataset.k), 'status', el.value);
+  // キャラ一覧の行（今・目標・状態）
+  if (el.dataset.rk) {
+    if (el.dataset.rparty) {
+      const party = partyById(el.dataset.rparty);
+      if (party) setPlan(party, Number(el.dataset.slot), Number(el.dataset.k), el.dataset.rk, el.value);
+    } else {
+      const c = charById(el.dataset.rchar);
+      if (c) setCharPlan(c, Number(el.dataset.k), el.dataset.rk, el.value);
+    }
     render();
   }
 });
@@ -1780,7 +1755,7 @@ document.addEventListener('submit', (e) => {
   if (!name) return;
   const picked = draft.rows.filter((r) => r.fruitId)
     .map((r) => ({ ...emptyPlan(), fruitId: r.fruitId, target: r.target }));
-  const c = addChar(name, picked.length ? picked : [emptyPlan()]);
+  const c = addChar(name, picked);
   draft = newDraft();
   render();
   $('[data-form="add-char"] input[name="name"]')?.focus();

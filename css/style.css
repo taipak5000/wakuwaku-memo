@@ -502,7 +502,7 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible, .icon-btn:focus-v
   bottom: 0;
   z-index: 30;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   background: var(--surface);
   border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom);
@@ -593,7 +593,7 @@ dialog.sheet h2 { font-size: 1.1rem; margin-bottom: 14px; }
 .offline-badge { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
 
 .tabbar {
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   background: var(--glass);
   border-top: 0.5px solid var(--line);
   backdrop-filter: blur(20px) saturate(180%);
@@ -811,3 +811,26 @@ button.pick:disabled { opacity: .4; cursor: default; }
   background: var(--surface); border-top: 0.5px solid var(--line);
 }
 .pick-footer .field { margin-bottom: 4px; }
+
+/* ---------- キャラ一覧（やること形式） ---------- */
+
+.todo-head { flex-wrap: nowrap; }
+.todo-head h3 { min-width: 0; overflow-wrap: anywhere; }
+.todo-head .chips { flex: 1 1 auto; min-width: 0; }
+.head-actions { display: flex; gap: 6px; margin-left: auto; flex: none; }
+.todo-card .char-memo { margin: 6px 0 0; }
+.todo-main { position: relative; padding-right: 28px; }
+.row-source { font-size: .78rem; }
+.row-remove {
+  position: absolute; top: -2px; right: -4px;
+  appearance: none; border: 0; background: none; cursor: pointer;
+  width: 28px; height: 28px; border-radius: 50%; color: var(--muted); font-size: 1rem;
+}
+.row-remove:hover { color: var(--danger); background: var(--danger-soft); }
+.todo-sub { flex-wrap: wrap; }
+.grade-edit { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
+.grade-edit select, .todo-sub > select { width: auto; min-height: 32px; padding: 4px 24px 4px 8px; font-size: 14px; background-color: var(--surface); }
+.hint { margin: 4px 4px 8px; }
+@media (max-width: 380px) {
+  .todo-head { flex-wrap: wrap; }
+}
