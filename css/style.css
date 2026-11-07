@@ -848,3 +848,17 @@ button.pick:disabled { opacity: .4; cursor: default; }
   width: 26px; height: 26px; border-radius: 50%; background: var(--ok); color: #fff; font-weight: 800; font-size: .85rem;
 }
 .pick-actions { margin-top: 10px; }
+
+/* ---------- バンクから移して完了 ---------- */
+
+.bank-box {
+  margin-top: 10px; padding: 10px 12px; border-radius: 12px;
+  background: var(--ok-soft); color: var(--text);
+}
+.bank-box p { margin: 0 0 4px; color: var(--ok); }
+.bank-box ul, .bank-picks { margin: 0 0 8px; padding-left: 1.2em; font-size: .88rem; }
+.bank-box li.below, .bank-picks li.below { color: var(--accent); }
+.bank-box .btn { width: 100%; background: var(--ok); color: #fff; }
+.bank-hit .btn.primary { width: 100%; }
+.bank-picks { margin-top: 8px; }
+.stats.two { grid-template-columns: repeat(2, 1fr); }

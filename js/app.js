@@ -346,67 +346,72 @@ function forEachPlan(fn) {
   for (const c of state.characters) c.plans.forEach((p, k) => fn(c, p, { char: c, k }));
 }
 
-const planOf = (ref) => (ref.party ? ref.party.members[ref.i].plans[ref.k] : ref.char.plans[ref.k]);
 const sourceLink = (ref) => (ref.party
   ? `<a href="#/party/${esc(ref.party.id)}">${esc(ref.party.name)}</a>`
   : `<a href="#/char/${esc(ref.char.id)}">キャラのメモ</a>`);
 
-function collectTargets() {
-  const map = new Map();
-  forEachPlan((c, p, ref) => {
-    if (!p.fruitId || !fruitById(p.fruitId)) return;
-    const key = `${c.id}|${p.fruitId}`;
-    if (!map.has(key)) map.set(key, { key, c, fruitId: p.fruitId, target: 999, current: 999, refs: [] });
-    const t = map.get(key);
-    if (p.target) t.target = Math.min(t.target, gradeRank(p.target));
-    if (p.current) t.current = Math.min(t.current, gradeRank(p.current));
-    if (p.status !== 'done') t.refs.push(ref);
+// キャラの残り（未完了）の実を、すべてバンクの実で埋められるときだけ、移す組み合わせを返す。
+// 目標の等級に届く実があればそのうち一番低いもの（良い実は取っておく）、なければ一番高いものを使う。
+// 目標より低い等級でも移せる（厳選を終わらせるかどうかは本人が決める）。
+function bankPlanFor(c) {
+  if (c.done) return null;
+  const rest = c.plans
+    .map((p, k) => ({ p, k }))
+    .filter(({ p }) => p.fruitId && p.status !== 'done' && fruitById(p.fruitId));
+  if (!rest.length) return null;
+  const pool = state.bank.filter((b) => b.accountId === c.accountId);
+  const left = new Map(pool.map((b) => [b.id, b.count]));
+  const picks = [];
+  for (const { p, k } of rest) {
+    const cands = pool.filter((b) => b.fruitId === p.fruitId && left.get(b.id) > 0);
+    if (!cands.length) return null;
+    const meets = cands
+      .filter((b) => p.target && gradeRank(b.grade) <= gradeRank(p.target))
+      .sort((x, y) => gradeRank(y.grade) - gradeRank(x.grade));
+    const entry = meets[0] || [...cands].sort((x, y) => gradeRank(x.grade) - gradeRank(y.grade))[0];
+    left.set(entry.id, left.get(entry.id) - 1);
+    picks.push({ k, p, entry, below: !!p.target && gradeRank(entry.grade) > gradeRank(p.target) });
+  }
+  return picks;
+}
+
+// バンクに同じ実が（等級を問わず）あれば、その中で一番高い等級を返す
+function bankBest(c, fruitId) {
+  const list = state.bank.filter((b) => b.fruitId === fruitId && b.accountId === c.accountId);
+  if (!list.length) return '';
+  return list.sort((x, y) => gradeRank(x.grade) - gradeRank(y.grade))[0].grade;
+}
+
+const pickText = (x) => {
+  const f = fruitById(x.p.fruitId);
+  return `${f ? f.short : '実'}：${x.entry.grade}${x.below ? `（目標 ${x.p.target} より下）` : ''}`;
+};
+
+// バンクから実を移して、そのキャラの厳選を完了にする
+async function moveAllFromBank(c) {
+  const picks = bankPlanFor(c);
+  if (!picks) return;
+  const ok = await ask({
+    title: `${c.name}にバンクの実を移しますか？`,
+    text: `${picks.map(pickText).join('\n')}\n\n移すと、このキャラは厳選完了になります。`,
+    ok: '移して完了にする'
   });
-  return [...map.values()].filter((t) => t.refs.length && !(t.target < 999 && t.current <= t.target));
-}
-
-function bankMatches() {
-  const targets = collectTargets();
-  const complete = [];
-  const upgrade = [];
-  const done = new Set();
-  for (const entry of state.bank) {
-    const r = gradeRank(entry.grade);
-    const same = targets.filter((t) => t.fruitId === entry.fruitId && t.target < 999 && t.c.accountId === entry.accountId);
-    const ok = same.filter((t) => r <= t.target);
-    if (ok.length) {
-      complete.push({ entry, targets: ok });
-      ok.forEach((t) => done.add(t.key));
-    }
-  }
-  for (const entry of state.bank) {
-    const r = gradeRank(entry.grade);
-    const up = targets.filter((t) => t.fruitId === entry.fruitId && t.target < 999 && t.c.accountId === entry.accountId
-      && r > t.target && r < t.current && !done.has(t.key));
-    if (up.length) upgrade.push({ entry, targets: up });
-  }
-  const noTarget = targets.filter((t) => t.target === 999
-    && state.bank.some((b) => b.fruitId === t.fruitId && b.accountId === t.c.accountId));
-  return { complete, upgrade, noTarget, completeCount: done.size };
-}
-
-// バンクの実が、目標に届く等級で入っているか
-const bankCovers = (c, fruitId, target) => !!target && state.bank.some((b) =>
-  b.fruitId === fruitId && b.accountId === c.accountId && gradeRank(b.grade) <= gradeRank(target));
-
-function moveFromBank(entryId, key) {
-  const entry = state.bank.find((b) => b.id === entryId);
-  const t = collectTargets().find((x) => x.key === key);
-  if (!entry || !t) return;
+  if (!ok || !charById(c.id)) return;
+  const now = bankPlanFor(c); // 確認中に変わっていないか、もう一度組み立てる
+  if (!now) return;
   const before = JSON.stringify(state);
-  for (const ref of t.refs) applyPlan(planOf(ref), 'current', entry.grade);
-  for (const ref of t.refs) if (ref.party) ref.party.updatedAt = Date.now();
-  entry.count -= 1;
-  if (entry.count <= 0) state.bank = state.bank.filter((b) => b !== entry);
+  for (const { p, entry } of now) {
+    p.current = entry.grade;
+    p.status = 'done';
+    entry.count -= 1;
+  }
+  state.bank = state.bank.filter((b) => b.count > 0);
+  c.plans = c.plans.filter((p) => p.fruitId);
+  c.done = true;
+  c.doneAt = Date.now();
   save();
   render();
-  const f = fruitById(entry.fruitId);
-  toast(`${t.c.name}に${f ? f.short : '実'}（${entry.grade}）を移しました`, () => {
+  toast(`${c.name}にバンクの実を${now.length}つ移して、厳選完了にしました`, () => {
     state = normalize(JSON.parse(before));
     save();
     render();
@@ -699,35 +704,11 @@ function viewParty(id) {
 /* ---------- 画面：わくわくバンク ---------- */
 
 function viewBank() {
-  const { complete, upgrade, noTarget, completeCount } = bankMatches();
+  const ready = state.characters
+    .map((c) => ({ c, picks: bankPlanFor(c) }))
+    .filter((x) => x.picks)
+    .sort((x, y) => (y.c.priority - x.c.priority) || x.c.name.localeCompare(y.c.name, 'ja'));
   const total = state.bank.reduce((n, b) => n + b.count, 0);
-  const upgradeCount = new Set(upgrade.flatMap((x) => x.targets.map((t) => t.key))).size;
-  const gradeText = (rank) => (rank < 999 ? DATA.grades[rank] : 'なし');
-
-  const entryCard = ({ entry, targets }, isComplete) => {
-    const f = fruitById(entry.fruitId);
-    return `
-      <article class="card bank-hit${isComplete ? ' is-complete' : ''}">
-        <div class="bank-hit-head">
-          <b>${esc(f ? f.short : '（消した実）')}</b>
-          <span class="badge grade-badge">${esc(entry.grade)}</span>
-          <span class="badge self">×${entry.count}</span>
-          ${state.accounts.length ? `<span class="badge account">${esc(accountName(entry.accountId))}</span>` : ''}
-          ${targets.length > entry.count ? `<span class="badge bond">候補${targets.length}体に${entry.count}個</span>` : ''}
-        </div>
-        <ul class="bank-targets">
-          ${targets.map((t) => `
-            <li>
-              <div class="bank-target-main">
-                <b>${esc(t.c.name)}</b>
-                <span class="grade">今 ${esc(gradeText(t.current))} → 目標 ${esc(gradeText(t.target))}</span>
-                <span class="party-meta">${t.refs.map(sourceLink).filter((x, n, arr) => arr.indexOf(x) === n).join('、')}</span>
-              </div>
-              <button class="btn${isComplete ? ' primary' : ''}" data-action="bank-move" data-id="${esc(entry.id)}" data-key="${esc(t.key)}">移した</button>
-            </li>`).join('')}
-        </ul>
-      </article>`;
-  };
 
   const list = state.bank.map((b) => {
     const f = fruitById(b.fruitId);
@@ -748,21 +729,23 @@ function viewBank() {
         <h2>わくわくバンク</h2>
         <button class="btn primary" data-action="new-bank">＋ 実を登録</button>
       </div>
-      <p class="muted lead">バンクに入れている実を登録すると、パーティやキャラで狙っている実と照らし合わせて、移せば厳選が終わるキャラを探します。</p>
-      <div class="stats">
+      <p class="muted lead">バンクに入れている実を登録すると、残りの実をすべてバンクから移せば厳選が終わるキャラを探します。同じ候補はキャラの画面にも出るので、そこから移すこともできます。</p>
+      <div class="stats two">
         <div class="stat"><span>バンクの実</span><b>${total}</b></div>
-        <div class="stat ok"><span>移せば完了</span><b>${completeCount}</b></div>
-        <div class="stat"><span>等級が上がる</span><b>${upgradeCount}</b></div>
+        <div class="stat ok"><span>移せば完了</span><b>${ready.length}</b></div>
       </div>
 
       <h3 class="group-title">移せば厳選完了</h3>
-      ${complete.length ? `<div class="stack">${complete.map((x) => entryCard(x, true)).join('')}</div>`
-        : `<p class="muted">${state.bank.length ? '今のバンクの中に、移せば目標の等級に届く実はありません。' : 'バンクの実を登録すると、ここに候補が出ます。'}</p>`}
-
-      ${upgrade.length ? `<h3 class="group-title">目標には届かないが、今より等級が上がる</h3>
-        <div class="stack">${upgrade.map((x) => entryCard(x, false)).join('')}</div>` : ''}
-
-      ${noTarget.length ? `<p class="muted small">目標の等級が未設定なので判定していない枠：${noTarget.map((t) => `${esc(t.c.name)}の${esc(fruitById(t.fruitId).short)}`).join('、')}</p>` : ''}
+      ${ready.length ? `<div class="stack">${ready.map(({ c, picks }) => `
+        <article class="card bank-hit is-complete">
+          <div class="bank-hit-head">
+            <b><a class="plain" href="#/char/${esc(c.id)}">${esc(c.name)}</a></b>
+            ${c.accountId ? `<span class="badge account">${esc(accountName(c.accountId))}</span>` : ''}
+          </div>
+          <ul class="bank-picks">${picks.map((x) => `<li${x.below ? ' class="below"' : ''}>${esc(pickText(x))}</li>`).join('')}</ul>
+          <button class="btn primary" data-action="bank-complete" data-id="${esc(c.id)}">バンクから移して完了</button>
+        </article>`).join('')}</div>`
+        : `<p class="muted">${state.bank.length ? '残りの実をすべてバンクで埋められるキャラは、今はいません。' : 'バンクの実を登録すると、ここに候補が出ます。'}</p>`}
 
       <div class="card">
         <h3 class="card-title">バンクに入っている実</h3>
@@ -830,7 +813,7 @@ function fruitLine(c, ref, p, f) {
     <li class="todo-row status-${esc(p.status)}">
       <div class="todo-main">
         <b>${esc(f.short)}</b>
-        ${p.status !== 'done' && bankCovers(c, p.fruitId, p.target) ? '<a class="badge in-bank" href="#/bank">バンクにあり</a>' : ''}
+        ${p.status !== 'done' && bankBest(c, p.fruitId) ? `<span class="badge in-bank">バンクに${esc(bankBest(c, p.fruitId))}</span>` : ''}
         ${ref.party ? `<span class="row-source">${sourceLink(ref)}</span>` : ''}
         ${ref.party ? '' : `<button class="row-remove" data-action="remove-cplan" data-id="${esc(c.id)}" data-k="${ref.k}" aria-label="${esc(f.short)}を消す">×</button>`}
       </div>
@@ -843,6 +826,18 @@ function fruitLine(c, ref, p, f) {
         <select data-rk="status" ${bind} aria-label="状態">${options(DATA.statuses.map((x) => ({ value: x.id, label: x.label })), p.status)}</select>
       </div>
     </li>`;
+}
+
+// 残りの実がすべてバンクにあるときの案内とボタン
+function bankBox(c) {
+  const picks = bankPlanFor(c);
+  if (!picks) return '';
+  return `
+    <div class="bank-box">
+      <p><b>バンクの実を移せば厳選完了</b></p>
+      <ul>${picks.map((x) => `<li${x.below ? ' class="below"' : ''}>${esc(pickText(x))}</li>`).join('')}</ul>
+      <button class="btn primary" data-action="bank-complete" data-id="${esc(c.id)}">バンクから移して完了</button>
+    </div>`;
 }
 
 // 厳選完了のキャラについている実（チップ）
@@ -892,6 +887,7 @@ function viewChars() {
       ${c.memo ? `<p class="char-memo">${esc(c.memo)}</p>` : ''}
       ${rows.length ? `<ul class="todo-list">${rows.map((r) => fruitLine(c, r.ref, r.p, r.f)).join('')}</ul>`
         : `<p class="muted small">${charShow === 'open' && c.plans.some((p) => p.fruitId) ? '未完了の実はありません。' : '狙う実はまだありません。'}</p>`}
+      ${bankBox(c)}
       <div class="card-actions">
         ${c.plans.filter((p) => p.fruitId).length < MAX_CHAR_PLANS
           ? `<button class="btn add-plan" data-action="pick-cplan" data-id="${esc(c.id)}">＋ 狙う実を追加</button>` : ''}
@@ -1011,6 +1007,7 @@ function viewChar(id) {
       <div class="card">
         <h3 class="card-title">狙う実</h3>
         ${charPlans(c)}
+        ${bankBox(c)}
       </div>
 
       <details class="card attrs"${hasAttrs ? ' open' : ''}>
@@ -1240,10 +1237,8 @@ $('#bankForm').addEventListener('submit', (e) => {
   save();
   closeSheet($('#bankDialog'));
   render();
-  const n = bankMatches().complete
-    .filter((x) => x.entry.fruitId === data.fruitId && x.entry.grade === data.grade)
-    .reduce((sum, x) => sum + x.targets.length, 0);
-  toast(n ? `移せば完了になるキャラが${n}体見つかりました` : 'バンクに登録しました');
+  const n = state.characters.filter((c) => bankPlanFor(c)).length;
+  toast(n ? `バンクから移せば厳選完了になるキャラが${n}体います` : 'バンクに登録しました');
 });
 
 // キャラ一覧をアカウントで絞り込んでいるときは、新しく登録するものもそのアカウントにする
@@ -1695,8 +1690,9 @@ const actions = {
       render();
     });
   },
-  'bank-move'(el) {
-    moveFromBank(el.dataset.id, el.dataset.key);
+  'bank-complete'(el) {
+    const c = charById(el.dataset.id);
+    if (c) moveAllFromBank(c);
   },
   theme(el) {
     const v = el.dataset.value;
