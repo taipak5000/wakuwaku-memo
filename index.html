@@ -112,6 +112,25 @@
     </form>
   </dialog>
 
+  <!-- ほしい実をまとめて選ぶ -->
+  <dialog id="pickDialog" class="sheet">
+    <form method="dialog" id="pickForm">
+      <h2 id="pickTitle">ほしい実をまとめて選ぶ</h2>
+      <p id="pickNote" class="muted small"></p>
+      <div id="pickBody"></div>
+      <div class="pick-footer">
+        <label class="field">
+          <span>目標の等級</span>
+          <select name="target"></select>
+        </label>
+        <div class="dialog-actions">
+          <button type="button" class="btn ghost" data-action="close-dialog">やめる</button>
+          <button type="submit" class="btn primary" id="pickOk">追加する</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
   <datalist id="raceList"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 

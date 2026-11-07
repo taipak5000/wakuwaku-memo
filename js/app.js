@@ -828,7 +828,10 @@ function addForm() {
       </div>
       <div class="draft-rows">${rows}</div>
       <div class="draft-foot">
-        ${draft.rows.length < MAX_CHAR_PLANS ? '<button type="button" class="btn ghost draft-more" data-action="draft-add">＋ ほしい実をもう1つ</button>' : '<span></span>'}
+        ${draft.rows.length < MAX_CHAR_PLANS || draft.rows.some((r) => !r.fruitId) ? `<span class="draft-buttons">
+          <button type="button" class="btn ghost draft-more" data-action="draft-pick">＋ まとめて選ぶ</button>
+          ${draft.rows.length < MAX_CHAR_PLANS ? '<button type="button" class="btn ghost draft-more" data-action="draft-add">＋ 1つ追加</button>' : ''}
+        </span>` : '<span></span>'}
         <a class="draft-setting" href="#/fruits">一覧に出す実を選ぶ</a>
       </div>
     </form>`;
@@ -846,8 +849,8 @@ function charPlans(c) {
     `<button class="icon-btn" data-action="remove-cplan" data-id="${esc(c.id)}" data-k="${k}" aria-label="${k + 1}つ目の実を消す">×</button>`)).join('');
   return `
     ${rows ? `<div class="plans">${rows}</div>` : ''}
-    ${c.plans.length < MAX_CHAR_PLANS
-      ? `<button class="btn add-plan" data-action="add-cplan" data-id="${esc(c.id)}">＋ 狙う実を追加</button>` : ''}`;
+    ${c.plans.filter((p) => p.fruitId).length < MAX_CHAR_PLANS
+      ? `<button class="btn add-plan" data-action="pick-cplan" data-id="${esc(c.id)}">＋ 狙う実を追加（まとめて選べます）</button>` : ''}`;
 }
 
 function viewChars() {
@@ -1215,6 +1218,83 @@ function themeSetting() {
   }
 }
 
+/* ---------- ほしい実をまとめて選ぶシート ---------- */
+
+let picker = null; // { picked: [], limit, exclude: Set, onDone(fruitIds, target) }
+
+// limit は選べる残りの数、exclude はすでに選んでいる実（一覧に出さない）
+function openPicker({ limit, exclude = [], onDone }) {
+  if (limit <= 0) {
+    toast(`実は${MAX_CHAR_PLANS}つまでです`);
+    return;
+  }
+  picker = { picked: [], limit, exclude: new Set(exclude), onDone };
+  const form = $('#pickForm');
+  form.elements.target.innerHTML = options(DATA.grades, DATA.grades[DATA.grades.length - 1]);
+  renderPicker();
+  $('#pickDialog').showModal();
+}
+
+function renderPicker() {
+  if (!picker) return;
+  const fruits = allFruits().filter((f) => !isHiddenFruit(f.id) && !picker.exclude.has(f.id));
+  const full = picker.picked.length >= picker.limit;
+  $('#pickNote').textContent = `あと${picker.limit}つまで選べます。タップした順に追加します。`;
+  $('#pickBody').innerHTML = FRUIT_GROUPS.map(([label, test]) => {
+    const list = fruits.filter(test);
+    if (!list.length) return '';
+    // 絆の実は、加撃・加撃速・加命撃（攻撃力が上がる3つ）をまとめて選べる
+    const attackers = list.filter((f) => f.attack && BOND_SCOPES.includes(f.scope));
+    return `
+      <div class="pick-group">
+        <div class="pick-group-head">
+          <h3>${esc(label)}</h3>
+          ${attackers.length >= 2 ? `<button type="button" class="btn ghost pick-set" data-action="pick-set" data-ids="${esc(attackers.map((f) => f.id).join(' '))}">${attackers.every((f) => picker.picked.includes(f.id)) ? '加撃系を外す' : `加撃系${attackers.length}つ`}</button>` : ''}
+        </div>
+        <div class="pick-list">
+          ${list.map((f) => {
+            const n = picker.picked.indexOf(f.id);
+            return `<button type="button" class="pick${n >= 0 ? ' on' : ''}" data-action="pick-toggle" data-id="${esc(f.id)}"
+              aria-pressed="${n >= 0}"${n < 0 && full ? ' disabled' : ''}>${n >= 0 ? `<b>${n + 1}</b>` : ''}${esc(f.short)}</button>`;
+          }).join('')}
+        </div>
+      </div>`;
+  }).join('') || '<p class="muted">選べる実がありません。「データ → ほしい実の一覧に出す実」で表示する実を増やせます。</p>';
+  const ok = $('#pickOk');
+  ok.textContent = picker.picked.length ? `${picker.picked.length}つ追加する` : '追加する';
+  ok.disabled = !picker.picked.length;
+}
+
+function pickToggle(ids, on) {
+  for (const id of ids) {
+    const i = picker.picked.indexOf(id);
+    if (on && i < 0 && picker.picked.length < picker.limit) picker.picked.push(id);
+    if (!on && i >= 0) picker.picked.splice(i, 1);
+  }
+  renderPicker();
+}
+
+$('#pickForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (!picker?.picked.length) return;
+  const { picked, onDone } = picker;
+  const target = e.target.elements.target.value;
+  picker = null;
+  closeSheet($('#pickDialog'));
+  onDone(picked, target);
+});
+
+$('#pickDialog').addEventListener('close', () => { picker = null; });
+
+// 空いている枠から順に埋め、足りなければ後ろに足す
+function fillPlans(list, fruitIds, target, make) {
+  for (const fruitId of fruitIds) {
+    const empty = list.find((x) => !x.fruitId);
+    if (empty) Object.assign(empty, make(fruitId, target));
+    else list.push(make(fruitId, target));
+  }
+}
+
 /* ---------- 画面内の確認・入力（confirm / prompt の代わり） ---------- */
 
 let askResolve = null;
@@ -1374,6 +1454,47 @@ const actions = {
     if (v === 'all') setFruitsHidden(state.settings.hiddenFruits.slice(), false);
     else setFruitsHidden(SPEED_HP_IDS, v === 'speed-hide');
   },
+  'draft-pick'() {
+    const used = draft.rows.filter((r) => r.fruitId);
+    openPicker({
+      limit: MAX_CHAR_PLANS - used.length,
+      exclude: used.map((r) => r.fruitId),
+      onDone(ids, target) {
+        fillPlans(draft.rows, ids, target, (fruitId, t) => ({ fruitId, target: t }));
+        render();
+      }
+    });
+  },
+  'pick-cplan'(el) {
+    const c = charById(el.dataset.id);
+    if (!c) return;
+    const used = c.plans.filter((p) => p.fruitId);
+    openPicker({
+      limit: MAX_CHAR_PLANS - used.length,
+      exclude: used.map((p) => p.fruitId),
+      onDone(ids, target) {
+        if (!charById(c.id)) return;
+        fillPlans(c.plans, ids, target, (fruitId, t) => ({ ...emptyPlan(), fruitId, target: t }));
+        c.plans = c.plans.filter((p) => p.fruitId).concat(c.plans.filter((p) => !p.fruitId)).slice(0, MAX_CHAR_PLANS);
+        save();
+        render();
+        toast(`${c.name}に実を${ids.length}つ追加しました`);
+      }
+    });
+  },
+  'pick-toggle'(el) {
+    if (!picker) return;
+    pickToggle([el.dataset.id], !picker.picked.includes(el.dataset.id));
+  },
+  'pick-set'(el) {
+    if (!picker) return;
+    const ids = el.dataset.ids.split(' ');
+    const allOn = ids.every((id) => picker.picked.includes(id));
+    if (!allOn && picker.picked.filter((id) => !ids.includes(id)).length + ids.length > picker.limit) {
+      toast(`あと${picker.limit - picker.picked.length}つしか選べません`);
+    }
+    pickToggle(ids, !allOn);
+  },
   'draft-add'() {
     if (draft.rows.length >= MAX_CHAR_PLANS) return;
     draft.rows.push({ fruitId: '', target: DATA.grades[DATA.grades.length - 1] });
@@ -1390,14 +1511,6 @@ const actions = {
     c.priority = !c.priority;
     save();
     render();
-  },
-  'add-cplan'(el) {
-    const c = charById(el.dataset.id);
-    if (!c || c.plans.length >= MAX_CHAR_PLANS) return;
-    c.plans.push(emptyPlan());
-    save();
-    render();
-    $(`[data-fk="cplan-${CSS.escape(c.id)}-${c.plans.length - 1}-fruit"]`)?.focus();
   },
   'remove-cplan'(el) {
     const c = charById(el.dataset.id);
