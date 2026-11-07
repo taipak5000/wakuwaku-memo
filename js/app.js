@@ -829,7 +829,6 @@ function viewChars() {
         <h3><a class="plain" href="#/char/${esc(c.id)}">${esc(c.name)}</a></h3>
         <div class="chips">${chips(c)}</div>
         <span class="head-actions">
-          <a class="icon-btn" href="#/char/${esc(c.id)}" aria-label="${esc(c.name)}の詳細">›</a>
           <button class="icon-btn danger" data-action="delete-char" data-id="${esc(c.id)}" aria-label="${esc(c.name)}を削除">🗑</button>
         </span>
       </div>
