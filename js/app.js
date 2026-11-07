@@ -82,6 +82,8 @@ function normalize(raw) {
       memo: String(c.memo ?? '').slice(0, 300),
       accountId: accountOk(c.accountId),
       priority: !!c.priority,
+      done: !!c.done, // 厳選完了
+      doneAt: Number(c.doneAt) || 0,
       // パーティに入れずに、キャラ単体で狙う実
       plans: (Array.isArray(c.plans) ? c.plans : []).slice(0, 4).map(cleanPlan)
     }));
@@ -317,7 +319,9 @@ function partyHints(party, a) {
   }
 
   const sharedAny = BOND_SCOPES.some((s) => Object.values(a.groups[s]).some((idx) => idx.length >= 2));
-  if (a.memberCount >= 2 && !sharedAny) {
+  // 種族・撃種・戦型が未設定のキャラがいるときは、そろっているか判断できないので出さない
+  const allSet = a.chars.filter(Boolean).every((c) => c.race && c.hit && c.type);
+  if (a.memberCount >= 2 && !sharedAny && allSet) {
     hints.push({
       level: 'tip',
       text: '種族・撃種・戦型がそろっていないため、絆系の実はそれぞれ自分にだけ効きます。単体で伸ばすなら上昇値の大きい同族系が向いています'
@@ -505,8 +509,27 @@ function emptyBox(text, actionHtml = '') {
 
 /* ---------- 画面：パーティ一覧 ---------- */
 
+let partyPick = []; // パーティ一覧で選んでいる厳選完了キャラ
+
 function viewParties() {
   const list = [...state.parties].sort((a, b) => b.updatedAt - a.updatedAt);
+  const doneChars = state.characters.filter((c) => c.done).sort((x, y) => x.name.localeCompare(y.name, 'ja'));
+  partyPick = partyPick.filter((id) => doneChars.some((c) => c.id === id));
+  const doneBox = doneChars.length ? `
+      <div class="card">
+        <h3 class="card-title">厳選完了のキャラで編成する<small>タップして選び、まとめてパーティにできます（4体まで）。</small></h3>
+        <div class="pick-list">
+          ${doneChars.map((c) => {
+            const n = partyPick.indexOf(c.id);
+            return `<button type="button" class="pick${n >= 0 ? ' on' : ''}" data-action="party-pick" data-id="${esc(c.id)}"
+              aria-pressed="${n >= 0}"${n < 0 && partyPick.length >= PARTY_SIZE ? ' disabled' : ''}>${n >= 0 ? `<b>${n + 1}</b>` : ''}${esc(c.name)}</button>`;
+          }).join('')}
+        </div>
+        ${partyPick.length ? `<div class="row-actions pick-actions">
+          <button class="btn primary" data-action="party-from-pick">この${partyPick.length}体でパーティを作る</button>
+          <button class="btn ghost" data-action="party-pick-clear">選び直す</button>
+        </div>` : ''}
+      </div>` : '';
   const cards = list.map((p) => {
     const pr = progressOf(p);
     const names = p.members.map((m) => charById(m.charId)?.name).filter(Boolean);
@@ -531,6 +554,7 @@ function viewParties() {
         <h2>パーティ</h2>
         <button class="btn primary" data-action="new-party">＋ パーティを作る</button>
       </div>
+      ${doneBox}
       ${list.length ? `<div class="stack">${cards}</div>` : emptyBox(
         'クエストごとにパーティを作り、4体それぞれに狙う実をメモしていきます。',
         '<button class="btn primary" data-action="new-party">最初のパーティを作る</button>'
@@ -565,11 +589,30 @@ function viewParty(id) {
       ${hints.length ? `<ul class="hints">${hints.map((h) => `<li class="hint-${h.level}">${esc(h.text)}</li>`).join('')}</ul>` : ''}`
     : '<p class="muted">下の枠にキャラを入れると、種族・撃種・戦型の重なりがここに出ます。</p>';
 
-  const charOptions = [...state.characters].sort((x, y) => x.name.localeCompare(y.name, 'ja'))
-    .map((c) => {
-      const attrs = [c.race, c.hit, normType(c.type)].filter(Boolean).join('/');
-      return { value: c.id, label: `${c.name}${attrs ? `（${attrs}）` : ''}${c.accountId ? `・${accountName(c.accountId)}` : ''}` };
-    });
+  const charLabel = (c) => {
+    const attrs = [c.race, c.hit, normType(c.type)].filter(Boolean).join('/');
+    return `${c.done ? '✓ ' : ''}${c.name}${attrs ? `（${attrs}）` : ''}${c.accountId ? `・${accountName(c.accountId)}` : ''}`;
+  };
+  const sorted = [...state.characters].sort((x, y) => x.name.localeCompare(y.name, 'ja'));
+  // 厳選完了のキャラを先に、まとまりで出す
+  const charSelect = (sel) => {
+    const opt = (c) => `<option value="${esc(c.id)}"${c.id === sel ? ' selected' : ''}>${esc(charLabel(c))}</option>`;
+    const done = sorted.filter((c) => c.done);
+    const rest = sorted.filter((c) => !c.done);
+    return `<option value="">— キャラを選ぶ —</option>`
+      + (done.length ? `<optgroup label="厳選完了">${done.map(opt).join('')}</optgroup>` : '')
+      + (rest.length ? `<optgroup label="${done.length ? '厳選中' : 'キャラ'}">${rest.map(opt).join('')}</optgroup>` : '');
+  };
+  const inParty = new Set(party.members.map((m) => m.charId).filter(Boolean));
+  const freeSlot = party.members.findIndex((m) => !m.charId);
+  const doneOut = sorted.filter((c) => c.done && !inParty.has(c.id));
+  const quickAdd = doneOut.length && freeSlot >= 0 ? `
+      <div class="card">
+        <h3 class="card-title">厳選完了のキャラを入れる<small>タップすると空いている枠（${freeSlot + 1}体目）に入り、つけた実のメモも引き継ぎます。</small></h3>
+        <div class="pick-list">
+          ${doneOut.map((c) => `<button type="button" class="pick on" data-action="slot-quick" data-id="${esc(c.id)}">${esc(c.name)}</button>`).join('')}
+        </div>
+      </div>` : '';
 
   const slots = party.members.map((m, i) => {
     const c = a.chars[i];
@@ -586,7 +629,8 @@ function viewParty(id) {
       const f = p.fruitId ? fruitById(p.fruitId) : null;
       let badge = '';
       if (f && BOND_SCOPES.includes(f.scope)) {
-        badge = c ? `<span class="badge bond">${DATA.scopes[f.scope]} ×${a.reach(i, f.scope)}体</span>` : '';
+        const n = a.reach(i, f.scope); // 種族などが未設定なら 0
+        badge = c ? `<span class="badge bond">${DATA.scopes[f.scope]}${n ? ` ×${n}体` : ''}</span>` : '';
       } else if (f && f.scope === 'quest') {
         badge = '<span class="badge quest">クエスト全体</span>';
       } else if (f) {
@@ -602,7 +646,7 @@ function viewParty(id) {
         <div class="slot-head">
           <span class="slot-no">${i + 1}</span>
           <select class="slot-char" data-slot-char="${i}" data-fk="slot-${i}" aria-label="${i + 1}体目のキャラ">
-            ${options(charOptions, m.charId || '', '— キャラを選ぶ —')}
+            ${charSelect(m.charId || '')}
             <option value="__new">＋ 新しいキャラを登録</option>
           </select>
           ${c ? `<a class="icon-btn" href="#/char/${esc(c.id)}" aria-label="${esc(c.name)}を開く">✎</a>` : ''}
@@ -633,6 +677,8 @@ function viewParty(id) {
         <h3 class="card-title">編成の相性</h3>
         ${synergy}
       </div>
+
+      ${quickAdd}
 
       <div class="stack">${slots}</div>
 
@@ -799,6 +845,14 @@ function fruitLine(c, ref, p, f) {
     </li>`;
 }
 
+// 厳選完了のキャラについている実（チップ）
+function doneFruits(c) {
+  const list = c.plans.filter((p) => p.fruitId && fruitById(p.fruitId));
+  if (!list.length) return '<p class="muted small">実のメモはありません。</p>';
+  return `<div class="wish-list">${list.map((p) =>
+    `<span class="wish status-done">${esc(fruitById(p.fruitId).short)}${p.current ? `<small>${esc(p.current)}</small>` : ''}</span>`).join('')}</div>`;
+}
+
 function viewChars() {
   if (charFilter !== 'all' && charFilter !== '' && !accountById(charFilter)) charFilter = 'all';
   const order = { doing: 0, todo: 1, compromise: 2, done: 3 };
@@ -809,10 +863,13 @@ function viewChars() {
     const f = p.fruitId ? fruitById(p.fruitId) : null;
     if (!f) return;
     if (charShow === 'open' && p.status === 'done') return;
+    // パーティの枠に、キャラ自身のメモと同じ実が入っているときは二重に出さない
+    if (ref.party && c.plans.some((x) => x.fruitId === p.fruitId)) return;
     rowsOf.get(c.id)?.push({ ref, p, f });
   });
-  const groups = state.characters
-    .filter((c) => charFilter === 'all' || c.accountId === charFilter)
+  const inAccount = state.characters.filter((c) => charFilter === 'all' || c.accountId === charFilter);
+  const doneChars = inAccount.filter((c) => c.done).sort((x, y) => y.doneAt - x.doneAt);
+  const groups = inAccount.filter((c) => !c.done)
     .map((c) => ({ c, rows: rowsOf.get(c.id).sort((x, y) => order[x.p.status] - order[y.p.status]) }))
     .sort((x, y) => {
       const dx = x.rows.some((r) => r.p.status === 'doing') ? 0 : 1;
@@ -835,8 +892,29 @@ function viewChars() {
       ${c.memo ? `<p class="char-memo">${esc(c.memo)}</p>` : ''}
       ${rows.length ? `<ul class="todo-list">${rows.map((r) => fruitLine(c, r.ref, r.p, r.f)).join('')}</ul>`
         : `<p class="muted small">${charShow === 'open' && c.plans.some((p) => p.fruitId) ? '未完了の実はありません。' : '狙う実はまだありません。'}</p>`}
-      ${c.plans.filter((p) => p.fruitId).length < MAX_CHAR_PLANS
-        ? `<button class="btn add-plan" data-action="pick-cplan" data-id="${esc(c.id)}">＋ 狙う実を追加</button>` : ''}
+      <div class="card-actions">
+        ${c.plans.filter((p) => p.fruitId).length < MAX_CHAR_PLANS
+          ? `<button class="btn add-plan" data-action="pick-cplan" data-id="${esc(c.id)}">＋ 狙う実を追加</button>` : ''}
+        <button class="btn done-btn" data-action="complete-char" data-id="${esc(c.id)}">✓ 厳選完了</button>
+      </div>
+    </article>`;
+
+  // 厳選完了のキャラは、つけた実だけをまとめて小さく出す
+  const doneCard = (c) => `
+    <article class="card done-card">
+      <div class="todo-head">
+        <span class="done-mark" aria-hidden="true">✓</span>
+        <h3><a class="plain" href="#/char/${esc(c.id)}">${esc(c.name)}</a></h3>
+        <div class="chips">${chips(c)}</div>
+        <span class="head-actions">
+          <button class="icon-btn danger" data-action="delete-char" data-id="${esc(c.id)}" aria-label="${esc(c.name)}を削除">🗑</button>
+        </span>
+      </div>
+      ${doneFruits(c)}
+      <div class="card-actions">
+        <button class="btn ghost" data-action="reopen-char" data-id="${esc(c.id)}">厳選に戻す</button>
+        <button class="btn ghost" data-action="party-with" data-id="${esc(c.id)}">このキャラでパーティを作る</button>
+      </div>
     </article>`;
 
   return `
@@ -858,9 +936,15 @@ function viewChars() {
         ${prioritized.length ? `<h3 class="group-title">★ 優先して厳選する</h3><div class="stack">${prioritized.map(card).join('')}</div>` : ''}
         ${others.length ? `${prioritized.length ? '<h3 class="group-title">そのほか</h3>' : '<p class="muted small hint">☆を押したキャラは「優先」として上にまとまります。</p>'}
           <div class="stack">${others.map(card).join('')}</div>` : ''}`
+        : doneChars.length ? '<p class="muted">厳選中のキャラはいません。</p>'
         : state.characters.length
           ? '<p class="muted">このアカウントのキャラはまだいません。</p>'
           : emptyBox('キャラ名を入れて追加し、厳選したい実を選んでいきます。種族などの情報は要りません。')}
+
+      ${doneChars.length ? `
+        <h3 class="group-title">✓ 厳選完了（${doneChars.length}体）</h3>
+        <p class="muted small hint">パーティの画面で、厳選完了のキャラから編成できます。</p>
+        <div class="stack">${doneChars.map(doneCard).join('')}</div>` : ''}
 
       <div class="card accounts-card">
         <div class="section-head tight">
@@ -955,6 +1039,9 @@ function viewChar(id) {
       </div>` : ''}
 
       <div class="row-actions">
+        ${c.done
+          ? `<button class="btn" data-action="reopen-char" data-id="${esc(c.id)}">厳選に戻す</button>`
+          : `<button class="btn done-btn" data-action="complete-char" data-id="${esc(c.id)}">✓ 厳選完了</button>`}
         <button class="btn danger" data-action="delete-char" data-id="${esc(c.id)}">このキャラを削除する</button>
       </div>
     </section>`;
@@ -1341,6 +1428,32 @@ function setFruitsHidden(ids, hidden) {
   render();
 }
 
+// パーティの枠にキャラを入れる。枠に実のメモが無ければ、キャラ自身のメモの実を写す
+function setMember(party, i, charId) {
+  const m = party.members[i];
+  m.charId = charId;
+  if (!charId) {
+    m.plans = [];
+    return;
+  }
+  const c = charById(charId);
+  if (c && !m.plans.some((p) => p.fruitId)) {
+    m.plans = c.plans.filter((p) => p.fruitId).map((p) => ({ ...p }));
+  }
+}
+
+function completeChar(c) {
+  c.done = true;
+  c.doneAt = Date.now();
+  // 目標に届いた扱いにする（今の等級が空・目標より下なら目標にそろえる）
+  for (const p of c.plans) {
+    if (!p.fruitId) continue;
+    if (p.target && (!p.current || gradeRank(p.current) > gradeRank(p.target))) p.current = p.target;
+    p.status = 'done';
+  }
+  c.plans = c.plans.filter((p) => p.fruitId);
+}
+
 function addChar(name, plans = []) {
   const c = {
     id: uid(), name: name.slice(0, 40), race: '', hit: '', type: '', memo: '',
@@ -1480,6 +1593,64 @@ const actions = {
   },
   'draft-remove'(el) {
     draft.rows.splice(Number(el.dataset.n), 1);
+    render();
+  },
+  'complete-char'(el) {
+    const c = charById(el.dataset.id);
+    if (!c) return;
+    const before = JSON.stringify(state);
+    completeChar(c);
+    save();
+    render();
+    toast(`${c.name}を厳選完了にしました`, () => {
+      state = normalize(JSON.parse(before));
+      save();
+      render();
+    });
+  },
+  'reopen-char'(el) {
+    const c = charById(el.dataset.id);
+    if (!c) return;
+    c.done = false;
+    save();
+    render();
+    toast(`${c.name}を厳選中に戻しました`);
+  },
+  'party-with'(el) {
+    const c = charById(el.dataset.id);
+    if (!c) return;
+    partyPick = [c.id];
+    location.hash = '#/parties';
+  },
+  'party-pick'(el) {
+    const id = el.dataset.id;
+    const n = partyPick.indexOf(id);
+    if (n >= 0) partyPick.splice(n, 1);
+    else if (partyPick.length < PARTY_SIZE) partyPick.push(id);
+    render();
+  },
+  'party-pick-clear'() {
+    partyPick = [];
+    render();
+  },
+  'party-from-pick'() {
+    const ids = partyPick.filter((id) => charById(id)).slice(0, PARTY_SIZE);
+    if (!ids.length) return;
+    const p = newParty(`パーティ${state.parties.length + 1}`);
+    ids.forEach((id, i) => setMember(p, i, id));
+    state.parties.push(p);
+    partyPick = [];
+    save();
+    location.hash = `#/party/${p.id}`;
+    toast(`${ids.length}体でパーティを作りました`);
+  },
+  'slot-quick'(el) {
+    const party = partyById(currentRoute().id);
+    if (!party) return;
+    const i = party.members.findIndex((m) => !m.charId);
+    if (i < 0) return;
+    setMember(party, i, el.dataset.id);
+    touch(party);
     render();
   },
   'toggle-priority'(el) {
@@ -1679,8 +1850,7 @@ document.addEventListener('change', (e) => {
       return;
     }
     // キャラを入れ替えても実のメモは引き継ぐ。枠を空にしたときだけ消す
-    party.members[i].charId = el.value || null;
-    if (!el.value) party.members[i].plans = [];
+    setMember(party, i, el.value || null);
     touch(party);
     render();
     return;
