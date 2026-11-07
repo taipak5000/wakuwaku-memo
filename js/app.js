@@ -20,7 +20,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 /* ---------- 状態 ---------- */
 
 function defaultState() {
-  return { version: 1, settings: { slotCount: 3 }, characters: [], customFruits: [], parties: [], bank: [], accounts: [] };
+  return { version: 1, settings: { slotCount: 3, hiddenFruits: [] }, characters: [], customFruits: [], parties: [], bank: [], accounts: [] };
 }
 
 function emptyPlan() {
@@ -55,6 +55,9 @@ function normalize(raw) {
   if (!raw || typeof raw !== 'object') return s;
   const slotCount = Number(raw.settings?.slotCount);
   s.settings.slotCount = slotCount === 4 ? 4 : 3;
+  // ほしい実の選択肢に出さない実
+  s.settings.hiddenFruits = (Array.isArray(raw.settings?.hiddenFruits) ? raw.settings.hiddenFruits : [])
+    .filter((id) => typeof id === 'string').slice(0, 200);
 
   // メイン以外のアカウント（サブ垢など）。キャラやバンクの実が accountId で参照する（空はメイン）
   s.accounts = (Array.isArray(raw.accounts) ? raw.accounts : [])
@@ -426,18 +429,24 @@ function options(list, selected, placeholder) {
   }).join('');
 }
 
+const FRUIT_GROUPS = [
+  ['同族の絆', (f) => f.scope === 'race' && !f.custom],
+  ['撃種の絆', (f) => f.scope === 'hit' && !f.custom],
+  ['戦型の絆', (f) => f.scope === 'type' && !f.custom],
+  ['自分のみに効く実', (f) => f.scope === 'self' && !f.custom],
+  ['クエスト全体に効く実', (f) => f.scope === 'quest' && !f.custom],
+  ['自分で追加した実', (f) => f.custom]
+];
+
+// 絆の実のうち、加速・加命・加速命（攻撃力が上がらないもの）
+const SPEED_HP_IDS = DATA.fruits.filter((f) => /-(spd|hp|spdhp)$/.test(f.id)).map((f) => f.id);
+const isHiddenFruit = (id) => state.settings.hiddenFruits.includes(id);
+
+// 選択肢。非表示にした実は出さない（ただし、すでに選んでいる実は残す）
 function fruitOptions(selected, placeholder = '— 狙う実を選ぶ —') {
-  const groupsDef = [
-    ['同族の絆', (f) => f.scope === 'race' && !f.custom],
-    ['撃種の絆', (f) => f.scope === 'hit' && !f.custom],
-    ['戦型の絆', (f) => f.scope === 'type' && !f.custom],
-    ['自分のみに効く実', (f) => f.scope === 'self' && !f.custom],
-    ['クエスト全体に効く実', (f) => f.scope === 'quest' && !f.custom],
-    ['自分で追加した実', (f) => f.custom]
-  ];
-  const fruits = allFruits();
+  const fruits = allFruits().filter((f) => f.id === selected || !isHiddenFruit(f.id));
   let html = `<option value="">${esc(placeholder)}</option>`;
-  for (const [label, test] of groupsDef) {
+  for (const [label, test] of FRUIT_GROUPS) {
     const list = fruits.filter(test);
     if (!list.length) continue;
     html += `<optgroup label="${esc(label)}">`
@@ -818,7 +827,10 @@ function addForm() {
         <button class="btn primary" type="submit">追加</button>
       </div>
       <div class="draft-rows">${rows}</div>
-      ${draft.rows.length < MAX_CHAR_PLANS ? '<button type="button" class="btn ghost draft-more" data-action="draft-add">＋ ほしい実をもう1つ</button>' : ''}
+      <div class="draft-foot">
+        ${draft.rows.length < MAX_CHAR_PLANS ? '<button type="button" class="btn ghost draft-more" data-action="draft-add">＋ ほしい実をもう1つ</button>' : '<span></span>'}
+        <a class="draft-setting" href="#/fruits">一覧に出す実を選ぶ</a>
+      </div>
     </form>`;
 }
 
@@ -968,6 +980,46 @@ function viewChar(id) {
     </section>`;
 }
 
+/* ---------- 画面：ほしい実の一覧に出す実を選ぶ ---------- */
+
+function viewFruitPicker() {
+  const fruits = allFruits();
+  const shown = fruits.filter((f) => !isHiddenFruit(f.id)).length;
+  const groups = FRUIT_GROUPS.map(([label, test]) => {
+    const list = fruits.filter(test);
+    if (!list.length) return '';
+    const allOn = list.every((f) => !isHiddenFruit(f.id));
+    return `
+      <div class="card">
+        <div class="section-head tight">
+          <h3 class="card-title">${esc(label)}</h3>
+          <button class="btn ghost" data-action="fruit-group" data-ids="${esc(list.map((f) => f.id).join(' '))}" data-value="${allOn ? 'hide' : 'show'}">${allOn ? 'すべて外す' : 'すべて出す'}</button>
+        </div>
+        <div class="pick-list">
+          ${list.map((f) => `
+            <label class="pick${isHiddenFruit(f.id) ? '' : ' on'}">
+              <input type="checkbox" data-fruit-toggle="${esc(f.id)}"${isHiddenFruit(f.id) ? '' : ' checked'}>
+              <span>${esc(f.short)}</span>
+            </label>`).join('')}
+        </div>
+      </div>`;
+  }).join('');
+  const speedHidden = SPEED_HP_IDS.every(isHiddenFruit);
+
+  return `
+    <section>
+      <a class="back" href="#/data">‹ データ</a>
+      <h2>ほしい実の一覧に出す実</h2>
+      <p class="muted lead">チェックを外した実は、ほしい実・バンクの実を選ぶ一覧に出なくなります。すでにメモしている実は消えません。今 ${shown} / ${fruits.length} 種類を表示中です。</p>
+      <div class="row-actions pick-presets">
+        <button class="btn${speedHidden ? '' : ' primary'}" data-action="fruit-preset" data-value="${speedHidden ? 'speed-show' : 'speed-hide'}">
+          ${speedHidden ? '加速・加命・加速命を表示する' : '加速・加命・加速命を隠す'}</button>
+        <button class="btn" data-action="fruit-preset" data-value="all">すべて表示する</button>
+      </div>
+      ${groups}
+    </section>`;
+}
+
 /* ---------- 画面：データ ---------- */
 
 function viewData() {
@@ -988,6 +1040,10 @@ function viewData() {
             `<button class="${themeSetting() === v ? 'on' : ''}" data-action="theme" data-value="${v}">${l}</button>`).join('')}
         </div>
       </div>
+      <a class="card link-card" href="#/fruits">
+        <span><b>ほしい実の一覧に出す実</b><small>${state.settings.hiddenFruits.length ? `${state.settings.hiddenFruits.length} 種類を非表示中` : 'すべて表示中'}</small></span>
+        <span aria-hidden="true">›</span>
+      </a>
       <div class="card">
         <h3 class="card-title">パーティの実の枠の数</h3>
         <div class="seg" role="group" aria-label="実の枠の数">
@@ -1033,12 +1089,13 @@ function render() {
     todo: viewTodo,
     bank: viewBank,
     chars: viewChars,
+    fruits: viewFruitPicker,
     data: viewData
   };
   const app = $('#app');
   app.innerHTML = (views[name] || viewChars)();
 
-  const tab = name === 'party' ? 'parties' : name === 'char' ? 'chars' : name;
+  const tab = { party: 'parties', char: 'chars', fruits: 'data' }[name] || name;
   $$('.tabbar a').forEach((a) => {
     const on = a.dataset.tab === tab;
     a.classList.toggle('active', on);
@@ -1216,6 +1273,17 @@ function setCharPlan(c, k, key, value) {
   save();
 }
 
+function setFruitsHidden(ids, hidden) {
+  const set = new Set(state.settings.hiddenFruits);
+  for (const id of ids) {
+    if (hidden) set.add(id);
+    else set.delete(id);
+  }
+  state.settings.hiddenFruits = [...set];
+  save();
+  render();
+}
+
 function addChar(name, plans = [emptyPlan()]) {
   const c = {
     id: uid(), name: name.slice(0, 40), race: '', hit: '', type: '', memo: '',
@@ -1297,6 +1365,14 @@ const actions = {
       save();
       render();
     });
+  },
+  'fruit-group'(el) {
+    setFruitsHidden(el.dataset.ids.split(' '), el.dataset.value === 'hide');
+  },
+  'fruit-preset'(el) {
+    const v = el.dataset.value;
+    if (v === 'all') setFruitsHidden(state.settings.hiddenFruits.slice(), false);
+    else setFruitsHidden(SPEED_HP_IDS, v === 'speed-hide');
   },
   'draft-add'() {
     if (draft.rows.length >= MAX_CHAR_PLANS) return;
@@ -1481,6 +1557,11 @@ document.addEventListener('change', (e) => {
     };
     reader.readAsText(file);
     el.value = '';
+    return;
+  }
+
+  if (el.dataset.fruitToggle) {
+    setFruitsHidden([el.dataset.fruitToggle], !el.checked);
     return;
   }
 
