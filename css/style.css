@@ -862,3 +862,87 @@ button.pick:disabled { opacity: .4; cursor: default; }
 .bank-hit .btn.primary { width: 100%; }
 .bank-picks { margin-top: 8px; }
 .stats.two { grid-template-columns: repeat(2, 1fr); }
+
+/* ---------- 色分け：撃種（反射＝赤・貫通＝青）と属性 ---------- */
+
+:root {
+  --c-ref: #D70015; --c-ref-soft: rgba(255, 59, 48, 0.14);
+  --c-pen: #0062CC; --c-pen-soft: rgba(0, 122, 255, 0.14);
+  --c-fire: #E0301E; --c-water: #1E6FD9; --c-wood: #23893A; --c-light: #B07800; --c-dark: #7A3FD1;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --c-ref: #D9362B; --c-ref-soft: rgba(255, 69, 58, 0.2);
+    --c-pen: #2477D6; --c-pen-soft: rgba(10, 132, 255, 0.22);
+    --c-fire: #FF6B5B; --c-water: #5AA9FF; --c-wood: #4CD471; --c-light: #FFD23F; --c-dark: #C49BFF;
+  }
+}
+:root[data-theme="dark"] {
+  --c-ref: #D9362B; --c-ref-soft: rgba(255, 69, 58, 0.2);
+  --c-pen: #2477D6; --c-pen-soft: rgba(10, 132, 255, 0.22);
+  --c-fire: #FF6B5B; --c-water: #5AA9FF; --c-wood: #4CD471; --c-light: #FFD23F; --c-dark: #C49BFF;
+}
+
+.chip.hit-ref, .ac.hit-ref { background: var(--c-ref); color: #fff; }
+.chip.hit-pen, .ac.hit-pen { background: var(--c-pen); color: #fff; }
+.el-fire { --el: var(--c-fire); }
+.el-water { --el: var(--c-water); }
+.el-wood { --el: var(--c-wood); }
+.el-light { --el: var(--c-light); }
+.el-dark { --el: var(--c-dark); }
+/* 属性は撃種と見分けやすいよう、丸い色の印＋文字にする */
+.chip.el, .ac.el:not(.unset), .count-chip.el {
+  background: color-mix(in srgb, var(--el) 14%, transparent); color: var(--el);
+  box-shadow: inset 0 0 0 1.5px var(--el);
+}
+.chip.el::before, .ac.el:not(.unset)::before, .count-chip.el::before {
+  content: ""; display: inline-block; width: .6em; height: .6em; border-radius: 50%;
+  background: var(--el); margin-right: .3em; vertical-align: .05em;
+}
+.chip-count { background: var(--surface-2); color: var(--text); }
+
+/* ---------- タップで切り替えるボタン ---------- */
+
+.attr-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0 2px; }
+.ac {
+  appearance: none; border: 0; cursor: pointer; font: inherit;
+  min-height: 34px; min-width: 44px; padding: 4px 12px; border-radius: 999px;
+  font-size: .88rem; font-weight: 800; background: var(--surface-2); color: var(--text);
+  transition: transform .12s var(--ease);
+}
+.ac:active { transform: scale(0.93); }
+.ac.unset { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1.5px var(--line); border: 1.5px dashed var(--line); box-shadow: none; }
+.ac.type:not(.unset) { background: var(--primary-soft); color: var(--primary-text); }
+.ac.super { min-width: 34px; padding: 4px 8px; background: transparent; color: var(--muted); border: 1.5px dashed var(--line); }
+.ac.super.on { background: var(--primary); color: var(--primary-ink); border-color: transparent; }
+.ac.race:not(.unset) { background: var(--accent-soft); color: var(--accent); }
+.ac.race.open { box-shadow: 0 0 0 2px var(--accent); }
+.ac-count { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; background: var(--surface-2); border-radius: 999px; padding: 2px; }
+.ac-count b { min-width: 2.2em; text-align: center; font-size: .9rem; }
+.ac-count button {
+  appearance: none; border: 0; background: var(--surface); color: var(--text); cursor: pointer;
+  width: 30px; height: 30px; border-radius: 50%; font-size: 1rem; font-weight: 800;
+}
+.ac-count button:disabled { opacity: .35; cursor: default; }
+.race-panel { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; padding: 10px; border-radius: 12px; background: var(--surface-2); }
+.race-panel .pick { background: var(--surface); }
+.race-panel .pick.on { background: var(--accent-soft); color: var(--accent); }
+
+/* ---------- 持っているキャラ（パーティ画面） ---------- */
+
+.owned-add { margin-bottom: 8px; }
+.owned-list { list-style: none; margin: 0; padding: 0; }
+.owned-list li { padding: 10px 0; border-top: 0.5px solid var(--line); }
+.owned-list li.picked .owned-name { color: var(--primary-text); }
+.owned-head { display: flex; align-items: center; gap: 10px; }
+.owned-name { font-weight: 800; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.pick-dot {
+  appearance: none; flex: none; cursor: pointer; width: 28px; height: 28px; border-radius: 50%;
+  border: 2px solid var(--line); background: transparent; color: var(--primary-ink); font-weight: 800; font-size: .8rem;
+}
+.pick-dot.on { background: var(--primary); border-color: var(--primary); }
+.pick-dot:disabled { opacity: .35; cursor: default; }
+.slot .attr-editor { margin-top: 10px; }
+
+.count-chip.hit-ref { background: var(--c-ref); color: #fff; }
+.count-chip.hit-pen { background: var(--c-pen); color: #fff; }
