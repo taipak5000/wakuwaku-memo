@@ -730,7 +730,7 @@ function viewBank() {
 let charFilter = 'all';
 
 // 追加フォームの入力中の内容（再描画しても消えないように持っておく）
-const newDraft = () => ({ name: '', rows: [{ fruitId: '', target: DATA.grades[DATA.grades.length - 1] }] });
+const newDraft = () => ({ name: '', rows: [{ fruitId: '', target: DATA.defaultTarget }] });
 let draft = newDraft();
 
 function addForm() {
@@ -1207,7 +1207,7 @@ function openPicker({ limit, exclude = [], onDone }) {
   }
   picker = { picked: [], limit, exclude: new Set(exclude), onDone };
   const form = $('#pickForm');
-  form.elements.target.innerHTML = options(DATA.grades, DATA.grades[DATA.grades.length - 1]);
+  form.elements.target.innerHTML = options(DATA.grades, DATA.defaultTarget);
   renderPicker();
   $('#pickDialog').showModal();
 }
@@ -1354,7 +1354,7 @@ function addChar(name, plans = []) {
 function applyPlan(p, key, value) {
   if (key === 'fruitId') {
     p.fruitId = value;
-    if (value && !p.target) p.target = '特級L';
+    if (value && !p.target) p.target = DATA.defaultTarget;
     if (!value) Object.assign(p, emptyPlan());
   } else if (key === 'current') {
     p.current = value;
@@ -1474,7 +1474,7 @@ const actions = {
   },
   'draft-add'() {
     if (draft.rows.length >= MAX_CHAR_PLANS) return;
-    draft.rows.push({ fruitId: '', target: DATA.grades[DATA.grades.length - 1] });
+    draft.rows.push({ fruitId: '', target: DATA.defaultTarget });
     render();
     $(`[data-draft="fruitId"][data-n="${draft.rows.length - 1}"]`)?.focus();
   },
