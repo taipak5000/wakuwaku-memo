@@ -946,3 +946,68 @@ button.pick:disabled { opacity: .4; cursor: default; }
 
 .count-chip.hit-ref { background: var(--c-ref); color: #fff; }
 .count-chip.hit-pen { background: var(--c-pen); color: #fff; }
+
+/* ---------- 改善版：検索・サマリー・コンパクト表示 ---------- */
+
+.toolbar {
+  position: sticky;
+  top: 54px;
+  z-index: 15;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  margin-bottom: 12px;
+  border-radius: var(--radius);
+  background: var(--glass);
+  border: 0.5px solid var(--line);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+}
+.search-row { display: flex; gap: 8px; align-items: center; }
+.search-input {
+  flex: 1; min-width: 0;
+  background: var(--surface);
+  border-radius: 999px;
+  padding-left: 16px;
+  min-height: 44px;
+}
+.search-clear { flex: none; min-height: 36px; }
+.bank-search { margin-bottom: 8px; }
+.toolbar-row {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+}
+.sort-label { display: inline-flex; align-items: center; gap: 6px; font-size: .82rem; font-weight: 700; color: var(--muted); }
+.sort-select { width: auto; min-height: 36px; font-size: 14px; border-radius: 999px; padding-top: 4px; padding-bottom: 4px; }
+
+.summary-card { display: grid; gap: 8px; }
+.summary-stats { margin-bottom: 0; }
+.next-up { margin: 0; font-size: .9rem; }
+.next-up a { font-weight: 700; }
+.summary-bank-btn { background: var(--ok-soft); color: var(--ok); justify-content: center; }
+.backup-banner {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 10px 12px; border-radius: 12px;
+  background: var(--accent-soft); color: var(--text); font-size: .86rem;
+}
+.backup-banner span { flex: 1 1 220px; }
+.backup-note { color: var(--accent); font-weight: 700; font-size: .88rem; }
+
+.add-open-btn { width: 100%; margin-bottom: 12px; min-height: 48px; }
+.add-close { margin: -4px 0 10px; }
+
+a.wish { text-decoration: none; }
+.compact-card { padding: 12px 14px; }
+.compact-bank { margin: 6px 0 0; font-size: .85rem; font-weight: 700; color: var(--ok); }
+
+.quick-done {
+  appearance: none; border: 0; cursor: pointer; font: inherit;
+  font-size: .8rem; font-weight: 800;
+  min-height: 32px; padding: 4px 12px; border-radius: 999px;
+  background: var(--ok); color: #fff;
+  transition: transform .12s var(--ease);
+}
+.quick-done:active { transform: scale(0.95); }
+
+@media (max-width: 380px) {
+  .toolbar { top: 50px; }
+}

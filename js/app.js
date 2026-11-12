@@ -7,6 +7,10 @@
 
 const STORE_KEY = 'wakuwaku-memo:v1';
 const THEME_KEY = 'wakuwaku-memo:theme';
+// 表示の好みと最終書き出し日は、本体データ（STORE_KEY）とは別のキーに保存する。
+// 本体データの形式・キーは従来どおりなので、既存のメモはそのまま引き継がれる。
+const UI_KEY = 'wakuwaku-memo:ui-v1';
+const EXPORT_KEY = 'wakuwaku-memo:lastExport';
 const PARTY_SIZE = 4;
 const BOND_SCOPES = ['race', 'hit', 'type'];
 
@@ -147,6 +151,32 @@ function loadState() {
 
 let state = loadState();
 let saveTimer = null;
+
+/* ---------- 表示だけの状態（本体データには入れない） ---------- */
+
+let charQuery = '';   // キャラ画面の検索文字
+let charSort = 'smart'; // smart | name | remaining | near
+let bankQuery = '';   // バンク画面の検索文字
+let partyQuery = '';  // パーティ画面の検索文字
+let addOpen = null;   // キャラ追加フォームの開閉（null = キャラが0体なら開く）
+
+function loadUiCompact() {
+  try { return JSON.parse(localStorage.getItem(UI_KEY) || '{}').compact === true; } catch (e) { return false; }
+}
+let uiCompact = loadUiCompact();
+function setUiCompact(v) {
+  uiCompact = v;
+  try { localStorage.setItem(UI_KEY, JSON.stringify({ compact: v })); } catch (e) { /* 保存できなくても表示は切り替える */ }
+}
+function lastExportAt() {
+  try { return Number(localStorage.getItem(EXPORT_KEY)) || 0; } catch (e) { return 0; }
+}
+// キャラが3体以上いて、書き出しが一度もない／30日以上前のときだけ控えめに知らせる
+function backupStale() {
+  if (state.characters.length < 3) return false;
+  const t = lastExportAt();
+  return !t || (Date.now() - t) > 30 * 24 * 60 * 60 * 1000;
+}
 
 function writeNow() {
   clearTimeout(saveTimer);
@@ -553,18 +583,25 @@ function emptyBox(text, actionHtml = '') {
 let partyPick = []; // パーティ一覧で選んでいる厳選完了キャラ
 
 function viewParties() {
-  const list = [...state.parties].sort((a, b) => b.updatedAt - a.updatedAt);
-  const doneChars = state.characters.filter((c) => c.done).sort((x, y) => x.name.localeCompare(y.name, 'ja'));
-  partyPick = partyPick.filter((id) => doneChars.some((c) => c.id === id));
-  const totalOwned = doneChars.reduce((n, c) => n + c.count, 0);
+  const pq = partyQuery.trim().toLowerCase();
+  const allParties = [...state.parties].sort((a, b) => b.updatedAt - a.updatedAt);
+  const list = allParties.filter((p) => {
+    if (!pq) return true;
+    const names = p.members.map((m) => charById(m.charId)?.name || '').join(' ');
+    return p.name.toLowerCase().includes(pq) || (p.quest || '').toLowerCase().includes(pq) || names.toLowerCase().includes(pq);
+  });
+  const allDoneChars = state.characters.filter((c) => c.done).sort((x, y) => x.name.localeCompare(y.name, 'ja'));
+  partyPick = partyPick.filter((id) => allDoneChars.some((c) => c.id === id));
+  const doneChars = allDoneChars.filter((c) => !pq || c.name.toLowerCase().includes(pq));
+  const totalOwned = allDoneChars.reduce((n, c) => n + c.count, 0);
   const doneBox = `
       <div class="card owned">
-        <h3 class="card-title">持っているキャラ（厳選完了）<small>${doneChars.length ? `${doneChars.length}種類・${totalOwned}体。` : ''}ボタンをタップすると属性・撃種・戦型などが切り替わります。名前の左の丸で選ぶと、まとめてパーティにできます（4体まで）。</small></h3>
+        <h3 class="card-title">持っているキャラ（厳選完了）<small>${allDoneChars.length ? `${allDoneChars.length}種類・${totalOwned}体。` : ''}ボタンをタップすると属性・撃種・戦型などが切り替わります。名前の左の丸で選ぶと、まとめてパーティにできます（4体まで）。</small></h3>
         <form class="add-row owned-add" data-form="add-owned" autocomplete="off">
           <input name="name" maxlength="40" placeholder="厳選が終わっているキャラの名前" aria-label="キャラ名" required>
           <button class="btn primary" type="submit">登録</button>
         </form>
-        ${doneChars.length ? `<ul class="owned-list">
+        ${allDoneChars.length ? (doneChars.length ? `<ul class="owned-list">
           ${doneChars.map((c) => {
             const n = partyPick.indexOf(c.id);
             return `
@@ -578,7 +615,7 @@ function viewParties() {
               ${attrEditor(c)}
             </li>`;
           }).join('')}
-        </ul>` : '<p class="muted">まだいません。キャラの画面で「✓ 厳選完了」にしたキャラも、ここに並びます。</p>'}
+        </ul>` : '<p class="muted">検索に合うキャラはいません。</p>') : '<p class="muted">まだいません。キャラの画面で「✓ 厳選完了」にしたキャラも、ここに並びます。</p>'}
         ${partyPick.length ? `<div class="row-actions pick-actions">
           <button class="btn primary" data-action="party-from-pick">この${partyPick.length}体でパーティを作る</button>
           <button class="btn ghost" data-action="party-pick-clear">選び直す</button>
@@ -608,8 +645,16 @@ function viewParties() {
         <h2>パーティ</h2>
         <button class="btn primary" data-action="new-party">＋ パーティを作る</button>
       </div>
+      ${(allParties.length || allDoneChars.length) ? `
+      <div class="toolbar">
+        <div class="search-row">
+          <input type="search" class="search-input" data-search="parties" data-fk="party-search" value="${esc(partyQuery)}" placeholder="パーティ名・クエスト・キャラ名で検索" aria-label="パーティを検索">
+          ${partyQuery ? '<button type="button" class="btn ghost search-clear" data-action="clear-search" data-k="parties">✕ クリア</button>' : ''}
+        </div>
+        ${pq ? `<p class="muted small">パーティ ${list.length} / ${allParties.length} 件・厳選完了キャラ ${doneChars.length} / ${allDoneChars.length} 体を表示中</p>` : ''}
+      </div>` : ''}
       ${doneBox}
-      ${list.length ? `<div class="stack">${cards}</div>` : emptyBox(
+      ${allParties.length ? (list.length ? `<div class="stack">${cards}</div>` : '<p class="muted">検索に合うパーティはありません。</p>') : emptyBox(
         'クエストごとにパーティを作り、4体それぞれに狙う実をメモしていきます。',
         '<button class="btn primary" data-action="new-party">最初のパーティを作る</button>'
       )}
@@ -765,8 +810,17 @@ function viewBank() {
     .filter((x) => x.picks)
     .sort((x, y) => (y.c.priority - x.c.priority) || x.c.name.localeCompare(y.c.name, 'ja'));
   const total = state.bank.reduce((n, b) => n + b.count, 0);
+  const bq = bankQuery.trim().toLowerCase();
+  const bankFiltered = state.bank.filter((b) => {
+    if (!bq) return true;
+    const f = fruitById(b.fruitId);
+    return (f && (f.short.toLowerCase().includes(bq) || f.name.toLowerCase().includes(bq)))
+      || b.grade.toLowerCase().includes(bq)
+      || (b.memo || '').toLowerCase().includes(bq)
+      || accountName(b.accountId).toLowerCase().includes(bq);
+  });
 
-  const list = state.bank.map((b) => {
+  const list = bankFiltered.map((b) => {
     const f = fruitById(b.fruitId);
     return `
       <li>
@@ -805,7 +859,12 @@ function viewBank() {
 
       <div class="card">
         <h3 class="card-title">バンクに入っている実</h3>
-        ${list ? `<ul class="fruit-list">${list}</ul>` : '<p class="muted">まだ登録されていません。</p>'}
+        <div class="search-row bank-search">
+          <input type="search" class="search-input" data-search="bank" data-fk="bank-search" value="${esc(bankQuery)}" placeholder="実の名前・等級・メモで検索" aria-label="バンクの実を検索">
+          ${bankQuery ? '<button type="button" class="btn ghost search-clear" data-action="clear-search" data-k="bank">✕ クリア</button>' : ''}
+        </div>
+        ${bq ? `<p class="muted small">${bankFiltered.length} / ${state.bank.length} 件を表示中</p>` : ''}
+        ${list ? `<ul class="fruit-list">${list}</ul>` : `<p class="muted">${state.bank.length && bq ? '検索に合う実はありません。' : 'まだ登録されていません。'}</p>`}
       </div>
     </section>`;
 }
@@ -865,6 +924,9 @@ function fruitLine(c, ref, p, f) {
   const bind = ref.party
     ? `data-rparty="${esc(ref.party.id)}" data-slot="${ref.i}" data-k="${ref.k}"`
     : `data-rchar="${esc(ref.char.id)}" data-k="${ref.k}"`;
+  const qbind = ref.party
+    ? `data-rparty="${esc(ref.party.id)}" data-slot="${ref.i}" data-k="${ref.k}"`
+    : `data-rchar="${esc(c.id)}" data-k="${ref.k}"`;
   return `
     <li class="todo-row status-${esc(p.status)}">
       <div class="todo-main">
@@ -880,6 +942,7 @@ function fruitLine(c, ref, p, f) {
           <select data-rk="target" ${bind} aria-label="目標の等級">${options(DATA.grades, p.target, '未設定')}</select>
         </span>
         <select data-rk="status" ${bind} aria-label="状態">${options(DATA.statuses.map((x) => ({ value: x.id, label: x.label })), p.status)}</select>
+        ${p.status !== 'done' ? `<button type="button" class="quick-done" data-action="quick-done" ${qbind}>✓ 完了にする</button>` : ''}
       </div>
     </li>`;
 }
@@ -919,18 +982,68 @@ function viewChars() {
     rowsOf.get(c.id)?.push({ ref, p, f });
   });
   const inAccount = state.characters.filter((c) => charFilter === 'all' || c.accountId === charFilter);
-  const doneChars = inAccount.filter((c) => c.done).sort((x, y) => y.doneAt - x.doneAt);
-  const groups = inAccount.filter((c) => !c.done)
-    .map((c) => ({ c, rows: rowsOf.get(c.id).sort((x, y) => order[x.p.status] - order[y.p.status]) }))
+
+  // ---- 検索（キャラ名・メモ・実の名前） ----
+  const q = charQuery.trim().toLowerCase();
+  const matches = (c) => {
+    if (!q) return true;
+    if (c.name.toLowerCase().includes(q) || (c.memo || '').toLowerCase().includes(q)) return true;
+    return c.plans.some((p) => {
+      const f = p.fruitId ? fruitById(p.fruitId) : null;
+      return f && (f.short.toLowerCase().includes(q) || f.name.toLowerCase().includes(q));
+    }) || (rowsOf.get(c.id) || []).some((r) => r.f.short.toLowerCase().includes(q) || r.f.name.toLowerCase().includes(q));
+  };
+
+  // ---- サマリー（検索前の、アカウント内の数字） ----
+  const openAll = inAccount.filter((c) => !c.done);
+  const remainCount = openAll.reduce((n, c) => n + (rowsOf.get(c.id) || []).filter((r) => r.p.status !== 'done').length, 0);
+  const bankReady = openAll.filter((c) => bankPlanFor(c));
+
+  const doneCharsAll = inAccount.filter((c) => c.done).sort((x, y) => y.doneAt - x.doneAt);
+  const doneChars = doneCharsAll.filter(matches);
+  const sortGroups = (list) => {
+    const arr = [...list];
+    if (charSort === 'name') arr.sort((x, y) => x.c.name.localeCompare(y.c.name, 'ja'));
+    else if (charSort === 'remaining') arr.sort((x, y) =>
+      (y.rows.filter((r) => r.p.status !== 'done').length - x.rows.filter((r) => r.p.status !== 'done').length)
+      || x.c.name.localeCompare(y.c.name, 'ja'));
+    else if (charSort === 'near') arr.sort((x, y) =>
+      ((x.rows.filter((r) => r.p.status !== 'done').length || 99) - (y.rows.filter((r) => r.p.status !== 'done').length || 99))
+      || x.c.name.localeCompare(y.c.name, 'ja'));
+    return arr;
+  };
+  const groups = sortGroups(inAccount.filter((c) => !c.done)
+    .map((c) => ({ c, rows: (rowsOf.get(c.id) || []).sort((x, y) => order[x.p.status] - order[y.p.status]) }))
     .sort((x, y) => {
       const dx = x.rows.some((r) => r.p.status === 'doing') ? 0 : 1;
       const dy = y.rows.some((r) => r.p.status === 'doing') ? 0 : 1;
       return dx - dy || x.c.name.localeCompare(y.c.name, 'ja');
-    });
+    })
+    .filter((g) => matches(g.c)));
   const prioritized = groups.filter((g) => g.c.priority);
   const others = groups.filter((g) => !g.c.priority);
+  const nextUp = groups.filter((g) => g.c.priority || g.rows.some((r) => r.p.status === 'doing')).slice(0, 5);
 
-  const card = ({ c, rows }) => `
+  const card = ({ c, rows }) => uiCompact ? `
+    <article class="card todo-card compact-card${c.priority ? ' is-priority' : ''}">
+      <div class="todo-head">
+        ${starButton(c)}
+        <h3><a class="plain" href="#/char/${esc(c.id)}">${esc(c.name)}</a></h3>
+        <div class="chips">${chips(c)}</div>
+        <span class="head-actions">
+          <button class="icon-btn danger" data-action="delete-char" data-id="${esc(c.id)}" aria-label="${esc(c.name)}を削除">🗑</button>
+        </span>
+      </div>
+      ${rows.length ? `<div class="wish-list">${rows.map((r) =>
+        `<a class="wish status-${esc(r.p.status)}" href="#/char/${esc(c.id)}">${esc(r.f.short)}<small>${esc(r.p.current || 'なし')} → ${esc(r.p.target || '未設定')}・${esc(statusLabel(r.p.status))}</small></a>`).join('')}</div>`
+        : `<p class="muted small">${charShow === 'open' && c.plans.some((p) => p.fruitId) ? '未完了の実はありません。' : '狙う実はまだありません。タップで詳細を開けます。'}</p>`}
+      ${bankPlanFor(c) ? '<p class="compact-bank">バンクの実を移せば厳選完了できます（詳細はタップ）</p>' : ''}
+      <div class="card-actions">
+        ${c.plans.filter((p) => p.fruitId).length < MAX_CHAR_PLANS
+          ? `<button class="btn add-plan" data-action="pick-cplan" data-id="${esc(c.id)}">＋ 狙う実を追加</button>` : ''}
+        <button class="btn done-btn" data-action="complete-char" data-id="${esc(c.id)}">✓ 厳選完了</button>
+      </div>
+    </article>` : `
     <article class="card todo-card${c.priority ? ' is-priority' : ''}">
       <div class="todo-head">
         ${starButton(c)}
@@ -969,6 +1082,44 @@ function viewChars() {
       </div>
     </article>`;
 
+  const showAdd = addOpen === null ? state.characters.length === 0 : addOpen;
+  const summary = state.characters.length ? `
+      <div class="card summary-card">
+        <div class="stats summary-stats">
+          <div class="stat"><span>厳選中</span><b>${openAll.length}</b></div>
+          <div class="stat"><span>残りの実</span><b>${remainCount}</b></div>
+          <div class="stat${bankReady.length ? ' ok' : ''}"><span>バンクで完了可</span><b>${bankReady.length}</b></div>
+        </div>
+        ${nextUp.length ? `<p class="next-up">次にやる：${nextUp.map((g) => `<a href="#/char/${esc(g.c.id)}">${esc(g.c.name)}</a>`).join('・')}</p>` : ''}
+        ${bankReady.length ? `<a class="btn summary-bank-btn" href="#/bank">バンクから移せるキャラが${bankReady.length}体います ›</a>` : ''}
+        ${backupStale() ? `<div class="backup-banner"><span>しばらくバックアップしていません。大事なメモを守るため、書き出しをおすすめします。</span><button type="button" class="btn" data-action="export">書き出す</button></div>` : ''}
+      </div>` : '';
+
+  const toolbar = state.characters.length ? `
+      <div class="toolbar">
+        <div class="search-row">
+          <input type="search" class="search-input" data-search="chars" data-fk="char-search" value="${esc(charQuery)}" placeholder="キャラ名・実の名前・メモで検索" aria-label="キャラを検索">
+          ${charQuery ? '<button type="button" class="btn ghost search-clear" data-action="clear-search" data-k="chars">✕ クリア</button>' : ''}
+        </div>
+        <div class="toolbar-row">
+          <label class="sort-label">並び順
+            <select class="sort-select" data-sort="chars" aria-label="並び順">
+              ${options([
+                { value: 'smart', label: 'おすすめ（厳選中→名前）' },
+                { value: 'name', label: '名前順' },
+                { value: 'remaining', label: '残りの実が多い順' },
+                { value: 'near', label: '完了が近い順' }
+              ], charSort)}
+            </select>
+          </label>
+          <div class="seg" role="group" aria-label="表示の密度">
+            <button class="${!uiCompact ? 'on' : ''}" data-action="density" data-value="normal">通常</button>
+            <button class="${uiCompact ? 'on' : ''}" data-action="density" data-value="compact">コンパクト</button>
+          </div>
+        </div>
+        ${q ? `<p class="muted small">「${esc(charQuery)}」：厳選中 ${groups.length} 体・完了 ${doneChars.length} 体が見つかりました</p>` : ''}
+      </div>` : '';
+
   return `
     <section>
       <div class="section-head">
@@ -978,7 +1129,10 @@ function viewChars() {
           <button class="${charShow === 'open' ? 'on' : ''}" data-action="char-show" data-value="open">未完了</button>
         </div>
       </div>
-      ${addForm()}
+      ${summary}
+      ${showAdd ? `${addForm()}${state.characters.length ? '<button type="button" class="btn ghost add-close" data-action="toggle-add">追加フォームを閉じる</button>' : ''}`
+        : '<button type="button" class="btn primary add-open-btn" data-action="toggle-add">＋ キャラを追加する</button>'}
+      ${toolbar}
       ${state.accounts.length ? `
       <div class="seg wrap" role="group" aria-label="アカウントで絞り込む">
         ${[{ value: 'all', label: 'すべて' }].concat(accountChoices()).map((o) =>
@@ -988,7 +1142,8 @@ function viewChars() {
         ${prioritized.length ? `<h3 class="group-title">★ 優先して厳選する</h3><div class="stack">${prioritized.map(card).join('')}</div>` : ''}
         ${others.length ? `${prioritized.length ? '<h3 class="group-title">そのほか</h3>' : '<p class="muted small hint">☆を押したキャラは「優先」として上にまとまります。</p>'}
           <div class="stack">${others.map(card).join('')}</div>` : ''}`
-        : doneChars.length ? '<p class="muted">厳選中のキャラはいません。</p>'
+        : q ? '<p class="muted">検索に合う厳選中のキャラはいません。</p>'
+        : doneCharsAll.length ? '<p class="muted">厳選中のキャラはいません。</p>'
         : state.characters.length
           ? '<p class="muted">このアカウントのキャラはまだいません。</p>'
           : emptyBox('キャラ名を入れて追加し、厳選したい実を選んでいきます。種族などの情報は要りません。')}
@@ -1170,6 +1325,8 @@ function viewData() {
           <button class="btn" data-action="import">ファイルから読み込む</button>
         </div>
         <input type="file" id="importFile" accept="application/json,.json" hidden>
+        ${lastExportAt() ? `<p class="muted">最終書き出し：${new Date(lastExportAt()).toLocaleDateString('ja-JP')}</p>` : (state.characters.length ? '<p class="muted">まだ書き出し（バックアップ）をしたことがありません。</p>' : '')}
+        ${backupStale() ? '<p class="backup-note">しばらくバックアップしていません。上の「ファイルに書き出す」から保存しておくと安心です。</p>' : ''}
         <p class="muted">キャラ ${state.characters.length} 体・パーティ ${state.parties.length} 個・バンクの実 ${state.bank.length} 種類${state.accounts.length ? `・アカウント ${state.accounts.length} 個` : ''}・使用量 約 ${Math.ceil(used / 1024)} KB</p>
       </div>
       <div class="card">
@@ -1192,6 +1349,7 @@ function currentRoute() {
 function render() {
   const { name, id } = currentRoute();
   const active = document.activeElement?.dataset?.fk;
+  const scrollY = window.scrollY;
   const views = {
     parties: viewParties,
     party: () => viewParty(id),
@@ -1215,8 +1373,16 @@ function render() {
 
   if (active) {
     const el = app.querySelector(`[data-fk="${CSS.escape(active)}"]`);
-    if (el) el.focus({ preventScroll: true });
+    if (el) {
+      el.focus({ preventScroll: true });
+      // 検索欄などはカーソルを末尾に戻す（入力のたびに再描画しても続けられるように）
+      if ((el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && typeof el.setSelectionRange === 'function') {
+        try { const n = el.value.length; el.setSelectionRange(n, n); } catch (e) { /* 種類によっては選べない */ }
+      }
+    }
   }
+  // 操作のたびの再描画でスクロール位置が飛ばないように戻す（画面遷移時は hashchange 側が先頭へ戻す）
+  if (scrollY) window.scrollTo(0, scrollY);
 }
 
 let lastRoute = '';
@@ -1843,6 +2009,7 @@ const actions = {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     toast(`${name} を書き出しました`);
+    try { localStorage.setItem(EXPORT_KEY, String(Date.now())); } catch (e) { /* 記録できなくても書き出し自体は完了 */ }
   },
   import() {
     $('#importFile')?.click();
@@ -1858,6 +2025,49 @@ const actions = {
     save();
     render();
     toast('データを消しました');
+  },
+  'quick-done'(el) {
+    let plan = null;
+    let party = null;
+    if (el.dataset.rparty) {
+      party = partyById(el.dataset.rparty);
+      if (!party) return;
+      const m = party.members[Number(el.dataset.slot)];
+      if (!m) return;
+      plan = plansOf(m)[Number(el.dataset.k)];
+    } else {
+      const c = charById(el.dataset.rchar);
+      if (!c) return;
+      plan = c.plans[Number(el.dataset.k)];
+    }
+    if (!plan || !plan.fruitId || plan.status === 'done') return;
+    const before = JSON.stringify(state);
+    if (plan.target && (!plan.current || gradeRank(plan.current) > gradeRank(plan.target))) plan.current = plan.target;
+    plan.status = 'done';
+    if (party) touch(party); else save();
+    render();
+    const f = fruitById(plan.fruitId);
+    toast(`${f ? f.short : '実'}を完了にしました`, () => {
+      state = normalize(JSON.parse(before));
+      save();
+      render();
+    });
+  },
+  'toggle-add'() {
+    const open = addOpen === null ? state.characters.length === 0 : addOpen;
+    addOpen = !open;
+    render();
+    if (addOpen) $('[data-form="add-char"] input[name="name"]')?.focus();
+  },
+  density(el) {
+    setUiCompact(el.dataset.value === 'compact');
+    render();
+  },
+  'clear-search'(el) {
+    if (el.dataset.k === 'chars') charQuery = '';
+    else if (el.dataset.k === 'bank') bankQuery = '';
+    else if (el.dataset.k === 'parties') partyQuery = '';
+    render();
   },
   'close-dialog'(el) {
     closeSheet(el.closest('dialog'));
@@ -1876,6 +2086,12 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('change', (e) => {
   const el = e.target;
+
+  if (el.dataset.sort === 'chars') {
+    charSort = el.value;
+    render();
+    return;
+  }
 
   if (el.id === 'importFile') {
     const file = el.files?.[0];
@@ -1983,6 +2199,13 @@ document.addEventListener('change', (e) => {
 
 document.addEventListener('input', (e) => {
   const el = e.target;
+  if (el.dataset.search) {
+    if (el.dataset.search === 'chars') charQuery = el.value;
+    else if (el.dataset.search === 'bank') bankQuery = el.value;
+    else if (el.dataset.search === 'parties') partyQuery = el.value;
+    render();
+    return;
+  }
   if (el.dataset.draft === 'name') {
     draft.name = el.value;
     return;
