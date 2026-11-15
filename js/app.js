@@ -2197,19 +2197,31 @@ document.addEventListener('change', (e) => {
   }
 });
 
+// 検索欄への入力を検索条件へ反映して再描画する。
+// ⚠️ 日本語入力（IME変換中）は絶対に再描画しないこと。変換中は input イベントが
+// 変換の途中経過でも発火するため、ここで render() が #app を作り直すと入力欄の
+// DOMごと消えて変換が強制確定され、ローマ字がそのまま残ってしまう
+// （例: 「みかづき」と打つと「ｍいｋあｄうｋい」になる）。
+// 変換が確定すると isComposing=false の input が改めて届くので、そこで反映すればよい。
+function applySearchInput(el) {
+  if (el.dataset.search === 'chars') charQuery = el.value;
+  else if (el.dataset.search === 'bank') bankQuery = el.value;
+  else if (el.dataset.search === 'parties') partyQuery = el.value;
+  render();
+}
+
 document.addEventListener('input', (e) => {
   const el = e.target;
   if (el.dataset.search) {
-    if (el.dataset.search === 'chars') charQuery = el.value;
-    else if (el.dataset.search === 'bank') bankQuery = el.value;
-    else if (el.dataset.search === 'parties') partyQuery = el.value;
-    render();
+    if (e.isComposing) return; // IME変換中は再描画しない（上記コメント参照）
+    applySearchInput(el);
     return;
   }
   if (el.dataset.draft === 'name') {
     draft.name = el.value;
     return;
   }
+  // （この下の通常フィールドは入力中に再描画しないのでIMEは壊れない）
   if (el.dataset.charField && el.tagName !== 'SELECT') {
     const c = charById(el.dataset.id);
     if (!c) return;
@@ -2224,6 +2236,14 @@ document.addEventListener('input', (e) => {
   if (!party) return;
   party[el.dataset.partyField] = el.value;
   touch(party);
+});
+
+// 変換確定の保険：ブラウザによっては確定直後の input が isComposing=false で
+// 届かない場合があるため、compositionend でも検索欄なら反映する。
+// （通常は直後の input と二重に走るが、同じ値での再描画なので無害）
+document.addEventListener('compositionend', (e) => {
+  const el = e.target;
+  if (el.dataset && el.dataset.search) applySearchInput(el);
 });
 
 // パーティ画面：厳選が終わっている持ちキャラを登録する
